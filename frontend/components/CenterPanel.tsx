@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import Image from 'next/image'
 import { useAppStore } from '@/store/appStore'
 import { CompassIcon, MicIcon, SendIcon, UserIcon } from './Icons'
 import { ItineraryCard } from './ItineraryCard'
@@ -37,7 +36,7 @@ export const CenterPanel = () => {
         timestamp: new Date(),
       })
     }
-  }, [])
+  }, [messages])
 
   const handleSendMessage = async () => {
     if (!input.trim()) return
