@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/store/appStore'
-import type { Message, Preference } from '@/store/appStore'
+import type { Itinerary, Message, Preference } from '@/store/appStore'
 import { CompassIcon, LogOutIcon, MicIcon, SendIcon, UserIcon } from './Icons'
 import { ItineraryCard } from './ItineraryCard'
 import { cn } from '@/lib/utils'
@@ -107,6 +107,33 @@ const getMessageThemeImage = (destinationLabel: string | null) => {
   }
 
   return null
+}
+
+const buildContextAwareFollowUpPrompt = (
+  option: string,
+  itinerary: Itinerary | null,
+  messages: Message[]
+) => {
+  const trimmedOption = option.trim()
+  if (!trimmedOption) {
+    return option
+  }
+
+  const latestUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content?.trim()
+  const destinationLabel = itinerary ? `${itinerary.destination}, ${itinerary.country}` : null
+
+  if (!destinationLabel && !latestUserMessage) {
+    return trimmedOption
+  }
+
+  const contextParts = [
+    destinationLabel ? `We are updating the existing trip to ${destinationLabel}.` : null,
+    latestUserMessage ? `Base request: ${latestUserMessage}` : null,
+    'Keep the same destination and previously shared trip context unless I explicitly change it.',
+    `Requested update: ${trimmedOption}.`,
+  ].filter(Boolean)
+
+  return contextParts.join('\n')
 }
 
 export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) => {
@@ -301,8 +328,11 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
       if (mappedPreferences.length) {
         setPreferences(userId, mappedPreferences)
       }
-      setItinerary(userId, mappedItinerary)
-      setItineraryInlineAfterMessageId(userId, mappedItinerary ? agentMessageId : null)
+
+      if (mappedItinerary) {
+        setItinerary(userId, mappedItinerary)
+        setItineraryInlineAfterMessageId(userId, agentMessageId)
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : 'Planner request failed due to an unknown error.'
@@ -350,7 +380,7 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
       return
     }
 
-    await handleUserMessage(option)
+    await handleUserMessage(buildContextAwareFollowUpPrompt(option, itinerary, messages))
   }
 
   const handleStarterPromptClick = (prompt: string) => {

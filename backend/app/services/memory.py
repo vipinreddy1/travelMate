@@ -77,6 +77,12 @@ class InMemorySessionStore:
         session = self._sessions.setdefault(session_id, SessionMemory())
         session.last_planning_state = planning_state
 
+    def get_last_planning_state(self, session_id: str) -> PlanningState | None:
+        session = self._sessions.get(session_id)
+        if session is None or session.last_planning_state is None:
+            return None
+        return session.last_planning_state.model_copy(deep=True)
+
     def increment_incomplete_attempts(self, session_id: str) -> int:
         session = self._sessions.setdefault(session_id, SessionMemory())
         session.incomplete_attempts += 1

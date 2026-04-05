@@ -139,6 +139,7 @@ class PlannerWorkflow:
     async def _extract_planning_state(self, state: PlannerGraphState) -> PlannerGraphState:
         request = state["request"]
         session_id = state["session_id"]
+        previous_planning_state = self.memory_store.get_last_planning_state(session_id)
 
         language_code = request.language_code or self.settings.default_language_code
         region_code = request.region_code or self.settings.default_region_code
@@ -177,6 +178,11 @@ class PlannerWorkflow:
         planning_state.assumptions.append(
             f"Transport preference set to {request.transport_preference.value}."
         )
+        if previous_planning_state is not None:
+            planning_state = self._hydrate_follow_up_planning_state(
+                current=planning_state,
+                previous=previous_planning_state,
+            )
         if context_block:
             planning_state.assumptions.append(
                 "Planner considered recent conversation context from session memory."
@@ -195,6 +201,90 @@ class PlannerWorkflow:
             "context_block": context_block,
             "origin": origin,
         }
+
+    def _hydrate_follow_up_planning_state(
+        self,
+        *,
+        current: PlanningState,
+        previous: PlanningState,
+    ) -> PlanningState:
+        destination_missing = (
+            current.destination.value.strip().lower() in {"", "unknown destination"}
+            or current.destination.confidence < 0.35
+        )
+        if destination_missing and previous.destination.value.strip():
+            current.destination = previous.destination.model_copy(deep=True)
+            current.assumptions.append(
+                f"Reused destination from session memory: {current.destination.value}."
+            )
+
+        if current.duration.selected_days is None and previous.duration.selected_days is not None:
+            current.duration.selected_days = previous.duration.selected_days
+            current.assumptions.append("Reused trip duration from session memory.")
+        if current.duration.min_days is None and previous.duration.min_days is not None:
+            current.duration.min_days = previous.duration.min_days
+        if current.duration.max_days is None and previous.duration.max_days is not None:
+            current.duration.max_days = previous.duration.max_days
+
+        if current.requested_stops is None and previous.requested_stops is not None:
+            current.requested_stops = previous.requested_stops
+            current.assumptions.append("Reused stop count preference from session memory.")
+
+        if current.max_walk_minutes is None and previous.max_walk_minutes is not None:
+            current.max_walk_minutes = previous.max_walk_minutes
+
+        budget_missing = (
+            current.budget.amount is None
+            and current.budget.level is None
+            and current.budget.currency_code is None
+        )
+        if budget_missing and (
+            previous.budget.amount is not None
+            or previous.budget.level is not None
+            or previous.budget.currency_code is not None
+        ):
+            current.budget = previous.budget.model_copy(deep=True)
+            current.assumptions.append("Reused budget preferences from session memory.")
+
+        party_missing = current.party.adults == 1 and current.party.children == 0
+        previous_party_is_specific = not (
+            previous.party.adults == 1 and previous.party.children == 0
+        )
+        if party_missing and previous_party_is_specific:
+            current.party = previous.party.model_copy(deep=True)
+
+        existing_hard_constraint_keys = {constraint.key for constraint in current.hard_constraints}
+        for constraint in previous.hard_constraints:
+            if constraint.key not in existing_hard_constraint_keys:
+                current.hard_constraints.append(constraint.model_copy(deep=True))
+
+        existing_soft_preference_keys = {preference.key for preference in current.soft_preferences}
+        for preference in previous.soft_preferences:
+            if preference.key not in existing_soft_preference_keys:
+                current.soft_preferences.append(preference.model_copy(deep=True))
+
+        existing_unknowns = set(current.unknowns)
+        current.unknowns = [
+            unknown
+            for unknown in current.unknowns
+            if not (
+                unknown == "destination"
+                and current.destination.value.strip().lower() not in {"", "unknown destination"}
+            )
+        ]
+        if current.duration.selected_days is not None:
+            current.unknowns = [unknown for unknown in current.unknowns if unknown != "duration"]
+        if current.budget.amount is not None or current.budget.level is not None:
+            current.unknowns = [unknown for unknown in current.unknowns if unknown != "budget"]
+        if current.requested_stops is not None:
+            current.unknowns = [unknown for unknown in current.unknowns if unknown != "requested_stops"]
+        current.unknowns.extend(
+            unknown
+            for unknown in previous.unknowns
+            if unknown not in existing_unknowns and unknown not in current.unknowns
+        )
+
+        return current
 
     async def _evaluate_completeness(self, state: PlannerGraphState) -> PlannerGraphState:
         session_id = state["session_id"]
