@@ -28,6 +28,12 @@ export default function RootLayout({
           async
           defer
         />
+        {/* ElevenLabs Voice Agent Widget Script */}
+        <script
+          src="https://unpkg.com/@elevenlabs/convai-widget-embed"
+          async
+          type="text/javascript"
+        />
       </head>
       <body className="antialiased">
         {children}
