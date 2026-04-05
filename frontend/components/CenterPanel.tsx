@@ -82,10 +82,29 @@ const normalizePresentationPreferences = (
     }
   })
 
+const getMessageThemeImage = (destinationLabel: string | null) => {
+  const normalizedLabel = destinationLabel?.trim().toLowerCase() || ''
+
+  if (!normalizedLabel) {
+    return null
+  }
+
+  if (normalizedLabel.includes('japan')) {
+    return '/images/themes/japan.png'
+  }
+
+  if (normalizedLabel.includes('vegas')) {
+    return '/images/themes/vegas.png'
+  }
+
+  return null
+}
+
 export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) => {
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [revealedCharsByMessageId, setRevealedCharsByMessageId] = useState<Record<string, number>>({})
+  const [isMessageThemeVisible, setIsMessageThemeVisible] = useState(false)
   const backendPlannerEnabled = true
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -122,6 +141,7 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
   const setItineraryInlineAfterMessageId = useAppStore((state) => state.setItineraryInlineAfterMessageId)
 
   const activeDestinationLabel = itinerary ? `${itinerary.destination}, ${itinerary.country}` : null
+  const messageThemeImage = getMessageThemeImage(activeDestinationLabel)
   const hasUserMessages = messages.some((message) => message.role === 'user')
 
   const isNearBottom = (element: HTMLDivElement) => {
@@ -140,6 +160,22 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
 
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, revealedCharsByMessageId])
+
+  useEffect(() => {
+    setIsMessageThemeVisible(false)
+
+    if (!messageThemeImage) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setIsMessageThemeVisible(true)
+    }, 4000)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [messageThemeImage])
 
   useEffect(() => {
     for (const message of messages) {
@@ -708,6 +744,15 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
 
       <div className="relative flex-1 overflow-hidden px-4 py-4">
         <div className="glass-panel relative z-10 h-full overflow-hidden rounded-[30px] border border-white/70 bg-white/48">
+          {messageThemeImage && (
+            <div
+              className={cn(
+                'pointer-events-none absolute inset-0 bg-cover bg-center transition-all duration-[1400ms] ease-out',
+                isMessageThemeVisible ? 'scale-100 opacity-70 blur-0' : 'scale-[1.08] opacity-0 blur-md'
+              )}
+              style={{ backgroundImage: `url(${messageThemeImage})` }}
+            />
+          )}
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/60 via-white/42 to-white/58" />
           <div
             ref={scrollContainerRef}
@@ -796,42 +841,44 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
                 </div>
               )}
 
-              <div className="glass-panel flex items-center gap-3 rounded-full border border-white/90 bg-warm-white/92 px-4 py-3 shadow-[0_18px_34px_rgba(15,23,42,0.12)] transition-all duration-300 focus-within:border-teal focus-within:shadow-[0_16px_28px_rgba(13,115,119,0.14)]">
-                <button
-                  onClick={handleMicToggle}
-                  className={cn(
-                    'mic-button interactive-float p-2 rounded-full transition-all duration-300 flex-shrink-0',
-                    isRecording && 'is-recording',
-                    isRecording ? 'bg-teal/20 text-teal' : 'text-text-muted hover:text-teal'
-                  )}
-                >
-                  <MicIcon size={20} isActive={isRecording} />
-                </button>
+              <div className="rounded-[26px] border border-white/85 bg-white/52 px-3 pb-4 pt-3 shadow-[0_14px_28px_rgba(15,23,42,0.08)] backdrop-blur-md">
+                <div className="glass-panel flex items-center gap-3 rounded-full border border-white/90 bg-warm-white/92 px-4 py-3 shadow-[0_18px_34px_rgba(15,23,42,0.12)] transition-all duration-300 focus-within:border-teal focus-within:shadow-[0_16px_28px_rgba(13,115,119,0.14)]">
+                  <button
+                    onClick={handleMicToggle}
+                    className={cn(
+                      'mic-button interactive-float p-2 rounded-full transition-all duration-300 flex-shrink-0',
+                      isRecording && 'is-recording',
+                      isRecording ? 'bg-teal/20 text-teal' : 'text-text-muted hover:text-teal'
+                    )}
+                  >
+                    <MicIcon size={20} isActive={isRecording} />
+                  </button>
 
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSendMessage()
-                  }}
-                  placeholder="Where do you want to go?"
-                  className="flex-1 bg-transparent outline-none text-sm placeholder-text-muted"
-                />
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSendMessage()
+                    }}
+                    placeholder="Where do you want to go?"
+                    className="flex-1 bg-transparent outline-none text-sm placeholder-text-muted"
+                  />
 
-                <button
-                  onClick={handleSendMessage}
-                  disabled={!input.trim() || isLoading}
-                  className="send-button interactive-float p-2 text-teal hover:bg-teal/10 rounded-full transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <SendIcon size={20} />
-                </button>
+                  <button
+                    onClick={handleSendMessage}
+                    disabled={!input.trim() || isLoading}
+                    className="send-button interactive-float p-2 text-teal hover:bg-teal/10 rounded-full transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <SendIcon size={20} />
+                  </button>
+                </div>
+
+                <p className="mt-4 text-center text-xs text-text-muted">
+                  Chat feels live: longer thinking, streaming text, and backend-driven Travel DNA.
+                </p>
               </div>
-
-              <p className="text-xs text-text-muted text-center mt-3">
-                Chat feels live: longer thinking, streaming text, and backend-driven Travel DNA.
-              </p>
             </div>
           </div>
         </div>

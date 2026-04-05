@@ -320,17 +320,45 @@ const getCountryLabel = (regionCode?: string): string => {
   }
 }
 
-const getHeroImageForDestination = (destination: string): string => {
-  const lower = destination.toLowerCase()
+const normalizeDestinationAndCountry = (destination: string, regionCode?: string) => {
+  const fallbackCountry = getCountryLabel(regionCode)
+  const segments = destination
+    .split(',')
+    .map((segment) => segment.trim())
+    .filter(Boolean)
 
-  if (lower.includes('tokyo') || lower.includes('japan')) {
-    return 'https://images.unsplash.com/photo-1540959375944-7049f642e9d4?w=1600&h=1000&fit=crop'
+  if (segments.length < 2) {
+    return {
+      destination,
+      country: fallbackCountry,
+    }
   }
-  if (lower.includes('vegas') || lower.includes('las vegas')) {
-    return 'https://images.unsplash.com/photo-1574219743318-5f0d79d85979?w=1600&h=1000&fit=crop'
+
+  const countryCandidate = segments[segments.length - 1]
+  const normalizedCountryCandidate = countryCandidate.toLowerCase()
+
+  if (normalizedCountryCandidate === 'usa' || normalizedCountryCandidate === 'united states') {
+    return {
+      destination,
+      country: fallbackCountry,
+    }
   }
-  if (lower.includes('vermont')) {
-    return 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=1600&h=1000&fit=crop'
+
+  return {
+    destination: segments.slice(0, -1).join(', '),
+    country: countryCandidate,
+  }
+}
+
+const getHeroImageForDestination = (destination: string, country?: string): string => {
+  const normalizedDestination = destination.trim().toLowerCase()
+  const normalizedCountry = (country || '').trim().toLowerCase()
+
+  if (normalizedCountry.includes('japan') || normalizedDestination.includes('japan')) {
+    return '/images/posters/japan.png'
+  }
+  if (normalizedDestination.includes('vegas') || normalizedDestination.includes('las vegas')) {
+    return '/images/posters/vegas.png'
   }
 
   return 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=1600&h=1000&fit=crop'
@@ -657,8 +685,12 @@ export const mapTripPlanToItinerary = (plan: TripPlanResponse): Itinerary | null
     return null
   }
 
-  const destination = plan.planning_state?.destination?.value?.trim() || plan.candidates[0]?.name || 'Planned trip'
-  const country = getCountryLabel(plan.planning_state?.region_code)
+  const rawDestination =
+    plan.planning_state?.destination?.value?.trim() || plan.candidates[0]?.name || 'Planned trip'
+  const { destination, country } = normalizeDestinationAndCountry(
+    rawDestination,
+    plan.planning_state?.region_code
+  )
   const startDate = plan.metadata?.itinerary_generated_at || new Date().toISOString()
   const endDate = addDays(startDate, Math.max(plan.itinerary.length - 1, 0))
   const estimatedTotal = plan.budget.estimated_total ?? null
@@ -714,7 +746,7 @@ export const mapTripPlanToItinerary = (plan: TripPlanResponse): Itinerary | null
         }
       }),
     })),
-    heroImage: getHeroImageForDestination(destination),
+    heroImage: getHeroImageForDestination(destination, country),
   }
 }
 

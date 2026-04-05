@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import Image from 'next/image'
 import {
   ChevronDownIcon,
   ArrowRightIcon,
@@ -87,18 +86,11 @@ export const ItineraryCard = ({ itinerary, onCalendarExportStarted }: ItineraryC
     <div className="glass-panel mx-auto max-w-2xl overflow-hidden rounded-[28px] border border-white/70 shadow-[0_24px_48px_rgba(15,23,42,0.1)]">
       <div
         className={cn(
-          'section-reveal relative h-64 w-full overflow-hidden bg-gray-200',
+          'section-reveal relative h-64 w-full overflow-hidden bg-gray-200 bg-cover bg-center',
           visibleSections.hero && 'is-visible'
         )}
+        style={{ backgroundImage: `url(${itinerary.heroImage})` }}
       >
-        <Image
-          src={itinerary.heroImage}
-          alt={itinerary.destination}
-          fill
-          className="object-cover scale-[1.03]"
-          priority
-          unoptimized
-        />
         <div className="absolute inset-0 bg-gradient-to-b from-white/10 via-black/5 to-black/55" />
         <div className="absolute bottom-6 left-6">
           <h2 className="mb-1 text-3xl font-bold text-white">{itinerary.destination}</h2>
