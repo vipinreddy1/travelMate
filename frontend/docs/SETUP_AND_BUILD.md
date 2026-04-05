@@ -2,6 +2,8 @@
 
 ## Environment Setup
 
+> Status note: this file contains some older setup notes. The current frontend already talks to the FastAPI backend through a same-origin proxy route and does not rely on the old mock-only planner flow.
+
 ### Prerequisites
 
 - **Node.js**: 18.17+ (LTS recommended)
@@ -33,14 +35,12 @@ cd travelMate/frontend
 npm install
 ```
 
-This installs all packages from `package.json`:
+This installs the frontend packages from `package.json`:
 - Next.js 14.0.4
 - React 18.2
 - TypeScript 5.3
 - Tailwind CSS 3.4
 - Zustand 4.4
-- ElevenLabs SDK
-- TanStack Query 5.28
 - And other utilities
 
 **Installation time**: ~2-5 minutes depending on connection
@@ -61,14 +61,10 @@ npm install --legacy-peer-deps
 Create `.env.local` file in `frontend/` directory:
 
 ```env
-# Placeholder for future API URLs and API keys
-# NEXT_PUBLIC_API_URL=http://localhost:8000
-# NEXT_PUBLIC_ELEVENLABS_API_KEY=your_key_here
-# NEXT_PUBLIC_AUTH0_DOMAIN=your_domain.auth0.com
-# NEXT_PUBLIC_AUTH0_CLIENT_ID=your_client_id
+NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
-**Note**: Current version uses mock data. Uncomment keys when integrating APIs.
+The browser uses `/api/planner/plan`, and that route forwards requests to `NEXT_PUBLIC_API_URL`.
 
 ### 4. Verify Installation
 
