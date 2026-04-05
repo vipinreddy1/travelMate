@@ -766,7 +766,7 @@ export const CenterPanel = ({ userEmail, userName }: CenterPanelProps) => {
           </div>
           <a
             href="/auth/logout"
-            className="flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-teal hover:text-teal"
+            className="signout-button interactive-float flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-teal hover:text-teal"
           >
             <LogOutIcon size={16} />
             <span className="hidden sm:inline">Sign out</span>
@@ -863,7 +863,8 @@ export const CenterPanel = ({ userEmail, userName }: CenterPanelProps) => {
           <button
             onClick={handleMicToggle}
             className={cn(
-              'p-2 rounded-full transition-all duration-300 flex-shrink-0',
+              'mic-button interactive-float p-2 rounded-full transition-all duration-300 flex-shrink-0',
+              isRecording && 'is-recording',
               isRecording ? 'bg-teal/20 text-teal' : 'text-text-muted hover:text-teal'
             )}
           >
@@ -885,7 +886,7 @@ export const CenterPanel = ({ userEmail, userName }: CenterPanelProps) => {
           <button
             onClick={handleSendMessage}
             disabled={!input.trim() || isLoading}
-            className="p-2 text-teal hover:bg-teal/10 rounded-full transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="send-button interactive-float p-2 text-teal hover:bg-teal/10 rounded-full transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <SendIcon size={20} />
           </button>
