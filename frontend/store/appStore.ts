@@ -14,6 +14,8 @@ export interface Message {
   content: string
   timestamp: Date
   isTyping?: boolean
+  options?: string[]
+  showOtherOption?: boolean
 }
 
 export interface Itinerary {
@@ -54,7 +56,7 @@ interface AppStore {
   
   // Messages
   messages: Message[]
-  addMessage: (message: Omit<Message, 'id'>) => void
+  addMessage: (message: Omit<Message, 'id'> & { id?: string }) => void
   setTypingStatus: (isTyping: boolean) => void
   clearMessages: () => void
   
@@ -88,13 +90,13 @@ export const useAppStore = create<AppStore>((set) => ({
   
   messages: [],
   
-  addMessage: (message: Omit<Message, 'id'>) =>
+  addMessage: (message: Omit<Message, 'id'> & { id?: string }) =>
     set((state: AppStore) => ({
       messages: [
         ...state.messages,
         {
           ...message,
-          id: `msg-${Date.now()}`,
+          id: message.id ?? `msg-${Date.now()}`,
         },
       ],
     })),
@@ -108,7 +110,7 @@ export const useAppStore = create<AppStore>((set) => ({
             {
               id: `typing-${Date.now()}`,
               role: 'agent',
-              content: '',
+              content: 'Agent thinking',
               timestamp: new Date(),
               isTyping: true,
             },

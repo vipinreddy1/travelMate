@@ -72,3 +72,53 @@ body {
 .typing-dot:nth-child(3) {
   animation-delay: 0.2s;
 }
+
+.agent-thinking-text {
+  animation: thinking-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes slide-up {
+  0% {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes highlight {
+  0% {
+    background-color: rgba(13, 115, 119, 0);
+  }
+  50% {
+    background-color: rgba(13, 115, 119, 0.12);
+  }
+  100% {
+    background-color: rgba(13, 115, 119, 0);
+  }
+}
+
+@keyframes typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes thinking-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
