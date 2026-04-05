@@ -9,6 +9,19 @@
   "coverImage": "/images/posters/vegas.png",
   "title": "Travel Diary: 5-Day Grand Canyon & Las Vegas Data-Driven Road Trip",
   "description": "A high-energy road trip from Arizona through the Grand Canyon to the electrifying streets of Las Vegas, tracked with meticulous detail.",
+  "destinations": [
+    { "dayNumber": 1, "name": "South Rim, Grand Canyon", "lat": 36.2384, "lng": -112.1383 },
+    { "dayNumber": 2, "name": "Grand Canyon Desert View", "lat": 36.2420, "lng": -112.0598 },
+    { "dayNumber": 3, "name": "Las Vegas Strip", "lat": 36.1699, "lng": -115.1398 },
+    { "dayNumber": 4, "name": "Fremont Street", "lat": 36.1652, "lng": -115.1426 },
+    { "dayNumber": 5, "name": "Las Vegas", "lat": 36.1699, "lng": -115.1398 }
+  ],
+  "metrics": {
+    "totalDays": 5,
+    "totalKm": 812,
+    "stopsCount": 15,
+    "averageActivitiesPerDay": 3
+  },
   "days": [
     {
       "dayNumber": 1,

@@ -9,6 +9,17 @@
   "coverImage": "/images/posters/japan.png",
   "title": "14-Day Grand Japan Itinerary: Cities, Alps, and Coast",
   "description": "An epic journey through Japan's most iconic destinations - from the neon-lit streets of Tokyo to the serene temples of Kyoto.",
+  "destinations": [
+    { "dayNumber": 1, "name": "Shinjuku", "lat": 35.6595, "lng": 139.7004 },
+    { "dayNumber": 2, "name": "Asakusa", "lat": 35.7148, "lng": 139.7967 },
+    { "dayNumber": 3, "name": "Harajuku", "lat": 35.6654, "lng": 139.7014 }
+  ],
+  "metrics": {
+    "totalDays": 3,
+    "totalKm": 45,
+    "stopsCount": 12,
+    "averageActivitiesPerDay": 4
+  },
   "days": [
     {
       "dayNumber": 1,
