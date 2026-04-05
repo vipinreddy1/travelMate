@@ -32,6 +32,7 @@ from app.services.query_builder import SearchQueryBuilder
 class PlannerGraphState(TypedDict, total=False):
     request: TravelPlanningRequest
     session_id: str
+    context_block: str
     planning_state: PlanningState
     completeness: CompletenessAssessment
     feasibility: FeasibilityAssessment
@@ -158,12 +159,18 @@ class PlannerWorkflow:
             )
 
         self.memory_store.set_last_planning_state(session_id, planning_state)
-        return {"planning_state": planning_state}
+        return {
+            "planning_state": planning_state,
+            "context_block": context_block,
+        }
 
     async def _evaluate_completeness(self, state: PlannerGraphState) -> PlannerGraphState:
         session_id = state["session_id"]
         planning_state = state["planning_state"]
-        completeness = self.completeness_evaluator.evaluate(planning_state)
+        completeness = self.completeness_evaluator.evaluate(
+            planning_state,
+            context_text=state.get("context_block", ""),
+        )
         if completeness.status == CompletenessStatus.COMPLETE:
             self.memory_store.reset_incomplete_attempts(session_id)
             incomplete_attempts = 0
@@ -309,6 +316,7 @@ class PlannerWorkflow:
 
     async def _finalize_response(self, state: PlannerGraphState) -> PlannerGraphState:
         session_id = state["session_id"]
+        response_context_limit = max(1, self.settings.planner_response_context_limit)
         planning_state = state["planning_state"]
         completeness = state.get(
             "completeness",
@@ -376,7 +384,10 @@ class PlannerWorkflow:
                 completeness=completeness,
                 feasibility=feasibility,
                 follow_up_question=follow_up,
-                recent_context=self.memory_store.get_recent_turns(session_id, limit=8),
+                recent_context=self.memory_store.get_recent_turns(
+                    session_id,
+                    limit=response_context_limit,
+                ),
                 planning_state=planning_state,
                 candidates=[],
                 itinerary=[],
@@ -421,7 +432,10 @@ class PlannerWorkflow:
                 completeness=completeness,
                 feasibility=feasibility,
                 follow_up_question=follow_up,
-                recent_context=self.memory_store.get_recent_turns(session_id, limit=8),
+                recent_context=self.memory_store.get_recent_turns(
+                    session_id,
+                    limit=response_context_limit,
+                ),
                 planning_state=planning_state,
                 candidates=[],
                 itinerary=[],
@@ -445,7 +459,10 @@ class PlannerWorkflow:
             completeness=completeness,
             feasibility=feasibility,
             follow_up_question=None,
-            recent_context=self.memory_store.get_recent_turns(session_id, limit=8),
+            recent_context=self.memory_store.get_recent_turns(
+                session_id,
+                limit=response_context_limit,
+            ),
             planning_state=planning_state,
             candidates=state["candidates"],
             itinerary=state["itinerary"],

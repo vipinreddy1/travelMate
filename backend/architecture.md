@@ -138,6 +138,7 @@ File: [`app/workflows/planner_graph.py`](./app/workflows/planner_graph.py)
 - determines `complete` vs `incomplete`
 - produces specific follow-up prompts for each missing field when needed
 - tracks per-session incomplete attempts in memory
+- uses prior session context so follow-up turns can omit destination/origin if they were already provided earlier
 - missing-detail priority order is fixed as:
   - `destination` -> `origin`
 

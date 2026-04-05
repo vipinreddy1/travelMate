@@ -15,7 +15,12 @@ class CompletenessEvaluator:
 
     REQUIRED_PRIORITY_ORDER = ["destination", "origin"]
 
-    def evaluate(self, planning_state: PlanningState) -> CompletenessAssessment:
+    def evaluate(
+        self,
+        planning_state: PlanningState,
+        *,
+        context_text: str = "",
+    ) -> CompletenessAssessment:
         if planning_state.intent_type == IntentType.ASK_TRAVEL_QUESTION:
             return CompletenessAssessment(
                 status=CompletenessStatus.INCOMPLETE,
@@ -26,7 +31,10 @@ class CompletenessEvaluator:
                 ),
             )
 
-        missing_information = self._collect_missing_information(planning_state)
+        missing_information = self._collect_missing_information(
+            planning_state,
+            context_text=context_text,
+        )
         if missing_information:
             top_missing = missing_information[0]
             prompt = self._follow_up_question(top_missing)
@@ -44,27 +52,54 @@ class CompletenessEvaluator:
             follow_up_question=None,
         )
 
-    def _collect_missing_information(self, planning_state: PlanningState) -> list[str]:
+    def _collect_missing_information(
+        self,
+        planning_state: PlanningState,
+        *,
+        context_text: str,
+    ) -> list[str]:
         checks = {
-            "destination": self._is_destination_missing(planning_state),
-            "origin": self._is_origin_missing(planning_state),
+            "destination": self._is_destination_missing(planning_state, context_text),
+            "origin": self._is_origin_missing(planning_state, context_text),
         }
         return [key for key in self.REQUIRED_PRIORITY_ORDER if checks[key]]
 
-    def _is_destination_missing(self, planning_state: PlanningState) -> bool:
+    def _is_destination_missing(
+        self,
+        planning_state: PlanningState,
+        context_text: str,
+    ) -> bool:
         destination_value = planning_state.destination.value.strip().lower()
-        return destination_value in {"", "unknown destination"} or planning_state.destination.confidence < 0.35
+        destination_known = not (
+            destination_value in {"", "unknown destination"}
+            or planning_state.destination.confidence < 0.35
+        )
+        if destination_known:
+            return False
 
-    def _is_origin_missing(self, planning_state: PlanningState) -> bool:
+        has_destination_in_context = bool(
+            re.search(
+                r"\b(?:in|to)\s+[A-Za-z][A-Za-z\s\-']{1,60}",
+                context_text,
+                flags=re.IGNORECASE,
+            )
+        )
+        return not has_destination_in_context
+
+    def _is_origin_missing(
+        self,
+        planning_state: PlanningState,
+        context_text: str,
+    ) -> bool:
         raw_request = planning_state.raw_request
         has_origin_in_prompt = bool(
             re.search(r"\bfrom\s+[A-Za-z][A-Za-z\s\-']+", raw_request, flags=re.IGNORECASE)
         )
-        has_origin_unknown = any(
-            "origin" in unknown.strip().lower()
-            for unknown in planning_state.unknowns
+        has_origin_in_context = bool(
+            re.search(r"\bfrom\s+[A-Za-z][A-Za-z\s\-']+", context_text, flags=re.IGNORECASE)
         )
-        return has_origin_unknown or not has_origin_in_prompt
+
+        return not (has_origin_in_prompt or has_origin_in_context)
 
     def _follow_up_question(self, missing_field: str) -> str:
         prompts = {

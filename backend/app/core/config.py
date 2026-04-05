@@ -32,6 +32,7 @@ class Settings(BaseModel):
     planner_default_stops_per_day: int = 4
     planner_shortlist_size: int = 8
     planner_max_incomplete_attempts: int = 3
+    planner_response_context_limit: int = 1
     planner_request_timeout_seconds: float = 20.0
     planner_enable_google_calls: bool = True
 
@@ -83,6 +84,9 @@ class Settings(BaseModel):
             ),
             planner_max_incomplete_attempts=int(
                 _read_value("PLANNER_MAX_INCOMPLETE_ATTEMPTS", "3", env_file_values)
+            ),
+            planner_response_context_limit=int(
+                _read_value("PLANNER_RESPONSE_CONTEXT_LIMIT", "1", env_file_values)
             ),
             planner_request_timeout_seconds=float(
                 _read_value("PLANNER_REQUEST_TIMEOUT_SECONDS", "20", env_file_values)

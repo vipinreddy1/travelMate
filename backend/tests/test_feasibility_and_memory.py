@@ -117,3 +117,24 @@ def test_session_memory_tracks_incomplete_attempts() -> None:
 
     store.reset_incomplete_attempts(session_id)
     assert store.get_incomplete_attempts(session_id) == 0
+
+
+def test_completeness_uses_session_context_for_origin_and_destination() -> None:
+    evaluator = CompletenessEvaluator()
+    planning_state = PlanningState(
+        raw_request="Make this a relaxed plan.",
+        intent_type=IntentType.PLAN_TRIP,
+        destination={"value": "Unknown destination", "confidence": 0.2, "source": "inferred"},
+        unknowns=["origin_city"],
+        language_code="en",
+        region_code="US",
+        currency_code="USD",
+    )
+
+    assessment = evaluator.evaluate(
+        planning_state,
+        context_text="user: Plan a 3-day trip from Denver to Kyoto with temples and food.",
+    )
+
+    assert assessment.status == CompletenessStatus.COMPLETE
+    assert assessment.missing_information == []
