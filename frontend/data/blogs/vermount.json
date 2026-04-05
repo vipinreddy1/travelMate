@@ -36,7 +36,8 @@
         "dinnerCost": "$51.00",
         "stepsWalked": 12000,
         "temperature": "55°F"
-      }
+      },
+      "images": ["/images/trip/vermount/vermount1.png"]
     },
     {
       "dayNumber": 2,
@@ -55,7 +56,8 @@
         "dinnerCost": "$18.00",
         "kayakDuration": "2 hours",
         "trainDuration": "3 hours"
-      }
+      },
+      "images": ["/images/trip/vermount/vermount2.png"]
     },
     {
       "dayNumber": 3,
@@ -71,7 +73,8 @@
         "longTrailDistance": "4.5 miles",
         "caloriesBurned": 1200,
         "dinnerCost": "$67.00"
-      }
+      },
+      "images": ["/images/trip/vermount/vermount3.png"]
     },
     {
       "dayNumber": 4,
@@ -87,7 +90,8 @@
         "bikeRentalCost": "$50.00",
         "lunchCost": "$22.00",
         "uberToAirportCost": "$15.00"
-      }
+      },
+      "images": ["/images/trip/vermount/vermount4.png"]
     }
   ]
 }

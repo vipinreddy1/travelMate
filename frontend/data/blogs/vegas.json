@@ -35,7 +35,8 @@
         "milesDriven": 168,
         "parkFee": "$35.00",
         "mealsCost": "$18.50"
-      }
+      },
+      "images": ["/images/trip/vegas/vegas1.png"]
     },
     {
       "dayNumber": 2,
@@ -49,7 +50,8 @@
         "elevationLoss": "1,120 ft",
         "mealsCost": "$4.50",
         "dinnerCost": "$62.00"
-      }
+      },
+      "images": ["/images/trip/vegas/vegas3.png"]
     },
     {
       "dayNumber": 3,
@@ -64,7 +66,8 @@
         "mealsCost": "$48.45",
         "stepsWalked": 14000,
         "hooverDamVisit": "30 minutes"
-      }
+      },
+      "images": ["/images/trip/vegas/vegas4.png"]
     },
     {
       "dayNumber": 4,
@@ -94,7 +97,8 @@
         "mealsCost": "$14.50",
         "totalMilesDriven": 812,
         "tripDuration": "5 days"
-      }
+      },
+      "images": ["/images/trip/vegas/vegas5.png"]
     }
   ]
 }
