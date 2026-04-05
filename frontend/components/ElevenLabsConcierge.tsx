@@ -11,6 +11,7 @@ interface ElevenLabsConciergeProps {
 }
 
 const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_CONVAI_AGENT_ID
+const WIDGET_ENABLED = process.env.NEXT_PUBLIC_ENABLE_ELEVENLABS_WIDGET === 'true'
 
 const buildPreferenceSummary = (
   preferences: Array<{ label: string; value: string }>
@@ -90,7 +91,7 @@ export const ElevenLabsConcierge = ({
     }
   }, [])
 
-  if (!AGENT_ID) {
+  if (!WIDGET_ENABLED || !AGENT_ID) {
     return null
   }
 
