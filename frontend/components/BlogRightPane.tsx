@@ -8,6 +8,7 @@ import type { Blog } from '@/lib/blogData'
 import { ArrowRightIcon } from '@/components/Icons'
 import { cn, formatDate } from '@/lib/utils'
 import DayImageGallery from '@/components/DayImageGallery'
+import ElevenLabsVoiceWidget from '@/components/ElevenLabsVoiceWidget'
 
 interface RightPaneProps {
   blog: Blog
@@ -210,6 +211,11 @@ export const RightPane = ({ blog, onScrollDayChange }: RightPaneProps) => {
           </Link>
         </div>
       </div>
+
+      {/* ElevenLabs Voice Agent Widget */}
+      {process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID && (
+        <ElevenLabsVoiceWidget agentId={process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID} />
+      )}
 
       {/* Footer */}
       <div className="bg-text-primary text-white py-12 mt-16">
