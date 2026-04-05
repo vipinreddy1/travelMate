@@ -51,6 +51,7 @@ class Settings(BaseModel):
         default_factory=lambda: [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
+            "https://travelmate.smart-deploy.xyz",
         ]
     )
     cors_allow_methods: list[str] = Field(default_factory=lambda: ["*"])
@@ -169,7 +170,7 @@ class Settings(BaseModel):
             cors_allow_origins=_read_csv(
                 _read_value(
                     "CORS_ALLOW_ORIGINS",
-                    "http://localhost:3000,http://127.0.0.1:3000",
+                    "http://localhost:3000,http://127.0.0.1:3000,https://travelmate.smart-deploy.xyz",
                     env_file_values,
                 )
             ),
