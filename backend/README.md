@@ -46,12 +46,14 @@ The service is split into a few readable layers:
   - If feasible: continue
 - Places + Routes calls (only when complete and feasible)
 - Final itinerary and explanation
+- Cached replay for repeated requests with a small configurable delay so repeat responses still feel conversational
 
 Implementation detail:
 
 - Workflow orchestration lives in `app/workflows/planner_graph.py`
 - Runs as a sequential workflow
 - Session memory is in-process (`InMemorySessionStore`) and ephemeral (resets on app restart)
+- Planner responses can also be cached in-process for repeated prompts within the configured TTL
 
 `POST /api/v1/planner/test-simple-gemini` remains a lightweight parser endpoint (no feasibility gate and no Places/Routes calls).
 
@@ -71,6 +73,12 @@ The app expects:
   - Used by the ElevenLabs text-to-speech helper in `app/services/elevenlabs_tts.py`
 - `ELEVENLABS_VOICE_ID`
   - Optional voice override for audio generation
+- `PLANNER_RESPONSE_CACHE_ENABLED`
+  - Enables in-memory response caching for repeated planner requests
+- `PLANNER_RESPONSE_CACHE_TTL_SECONDS`
+  - How long a cached planner response stays valid
+- `PLANNER_CACHED_RESPONSE_DELAY_SECONDS`
+  - Artificial delay applied before returning a cached response
 
 You should enable the relevant services in your Google project before running the app.
 

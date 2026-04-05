@@ -1,11 +1,4 @@
-export interface TripMindPreferenceMetadata {
-  budget: string
-  vibe: string
-  pace: string
-  dietary: string
-  stay: string
-  group: string
-}
+export type TripMindPreferenceMetadata = Record<string, string>
 
 export interface TripMindUserMetadata {
   preferences: TripMindPreferenceMetadata
@@ -33,12 +26,8 @@ export const normalizeTripMindMetadata = (
 
   return {
     preferences: {
-      budget: candidate?.preferences?.budget ?? defaults.preferences.budget,
-      vibe: candidate?.preferences?.vibe ?? defaults.preferences.vibe,
-      pace: candidate?.preferences?.pace ?? defaults.preferences.pace,
-      dietary: candidate?.preferences?.dietary ?? defaults.preferences.dietary,
-      stay: candidate?.preferences?.stay ?? defaults.preferences.stay,
-      group: candidate?.preferences?.group ?? defaults.preferences.group,
+      ...defaults.preferences,
+      ...(candidate?.preferences ?? {}),
     },
     profileInitializedAt: candidate?.profileInitializedAt ?? defaults.profileInitializedAt,
     profileVersion: candidate?.profileVersion ?? defaults.profileVersion,

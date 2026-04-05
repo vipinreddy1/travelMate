@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import re
 from typing import Any, TypedDict
 from uuid import uuid4
@@ -78,12 +81,30 @@ class PlannerWorkflow:
 
     async def run(self, request: TravelPlanningRequest) -> TripPlanResponse:
         session_id = request.session_id or str(uuid4())
+        cache_key = self._build_cache_key(
+            request=request,
+        )
+        if self.settings.planner_response_cache_enabled:
+            cached_response = self.memory_store.get_cached_planner_response(
+                cache_key,
+                ttl_seconds=self.settings.planner_response_cache_ttl_seconds,
+            )
+            if cached_response is not None:
+                return await self._serve_cached_response(
+                    session_id=session_id,
+                    request=request,
+                    cached_response=cached_response,
+                )
+
         initial_state: PlannerGraphState = {
             "request": request,
             "session_id": session_id,
         }
         result = await self._run_sequential(initial_state)
-        return result["response"]
+        response = result["response"]
+        if self.settings.planner_response_cache_enabled:
+            self.memory_store.set_cached_planner_response(cache_key, response)
+        return response
 
     async def _run_sequential(self, state: PlannerGraphState) -> PlannerGraphState:
         updates = await self._load_memory(state)
@@ -727,3 +748,50 @@ class PlannerWorkflow:
             if route.mode not in seen:
                 seen.append(route.mode)
         return seen
+
+    def _build_cache_key(
+        self,
+        *,
+        request: TravelPlanningRequest,
+    ) -> str:
+        payload = {
+            "prompt": request.prompt,
+        }
+        normalized = json.dumps(payload, sort_keys=True, ensure_ascii=True)
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    async def _serve_cached_response(
+        self,
+        *,
+        session_id: str,
+        request: TravelPlanningRequest,
+        cached_response: TripPlanResponse,
+    ) -> TripPlanResponse:
+        self.memory_store.append_turn(
+            session_id,
+            role=ConversationRole.USER,
+            content=request.prompt,
+        )
+
+        if self.settings.planner_cached_response_delay_seconds > 0:
+            await asyncio.sleep(self.settings.planner_cached_response_delay_seconds)
+
+        assistant_content = cached_response.follow_up_question or cached_response.explanation
+        self.memory_store.append_turn(
+            session_id,
+            role=ConversationRole.ASSISTANT,
+            content=assistant_content,
+        )
+        self.memory_store.set_last_planning_state(
+            session_id,
+            cached_response.planning_state.model_copy(deep=True),
+        )
+
+        response = cached_response.model_copy(deep=True)
+        response.session_id = session_id
+        response.recent_context = self.memory_store.get_recent_turns(
+            session_id,
+            limit=max(1, self.settings.planner_response_context_limit),
+        )
+        response.metadata.session_turn_count = self.memory_store.turn_count(session_id)
+        return response

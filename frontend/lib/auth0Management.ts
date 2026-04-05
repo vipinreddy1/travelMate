@@ -82,10 +82,7 @@ export const ensureAuth0UserMetadata = async (userId: string) => {
     !current ||
     current.profileVersion === undefined ||
     !current.preferences ||
-    Object.keys(normalized.preferences).some((key) => {
-      const typedKey = key as keyof TripMindUserMetadata['preferences']
-      return current.preferences?.[typedKey] === undefined
-    })
+    Object.keys(normalized.preferences).some((key) => current.preferences?.[key] === undefined)
 
   if (!isMissingDefaults) {
     return normalized

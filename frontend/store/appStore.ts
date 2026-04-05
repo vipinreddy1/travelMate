@@ -24,16 +24,16 @@ export interface Itinerary {
   startDate: string
   endDate: string
   flights: {
-    airline: string
-    departure: string
-    arrival: string
-    price: number
-    date: string
+    airline: string | null
+    departure: string | null
+    arrival: string | null
+    price: number | null
+    date: string | null
   }
   hotel: {
-    name: string
-    rating: number
-    price: number
+    name: string | null
+    rating: number | null
+    price: number | null
     image: string
   }
   days: Array<{
@@ -87,6 +87,7 @@ interface WorkspaceState {
 interface AppStore {
   workspaces: Record<string, WorkspaceState>
   ensureWorkspace: (userId: string) => void
+  setPreferences: (userId: string, preferences: Preference[]) => void
   replacePreferences: (userId: string, values: Partial<Record<string, string>>) => void
   updatePreference: (userId: string, key: string, value: string) => void
   messagesForUser: (userId: string) => Message[]
@@ -185,6 +186,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (state.workspaces[userId]) return state
       return updateWorkspace(state, userId, (workspace) => workspace)
     }),
+
+  setPreferences: (userId: string, preferences: Preference[]) =>
+    set((state) =>
+      updateWorkspace(state, userId, (workspace) => ({
+        ...workspace,
+        preferences,
+      }))
+    ),
 
   replacePreferences: (userId: string, values: Partial<Record<string, string>>) =>
     set((state) =>

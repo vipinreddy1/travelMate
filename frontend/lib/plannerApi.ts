@@ -1,3 +1,5 @@
+import type { Itinerary, Preference } from '@/store/appStore'
+
 export type TransportPreference =
   | 'own_transport'
   | 'public_transport'
@@ -62,19 +64,287 @@ interface BudgetEstimate {
   confidence: string
 }
 
+interface PreferenceWeight {
+  key: string
+  description: string
+  weight: number
+}
+
+interface PlanningConstraint {
+  key: string
+  description: string
+  value?: string | number | boolean | null
+}
+
+interface PlanningState {
+  destination?: {
+    value?: string
+  }
+  duration?: {
+    selected_days?: number | null
+    min_days?: number | null
+    max_days?: number | null
+  }
+  budget?: {
+    amount?: number | null
+    currency_code?: string | null
+    level?: string | null
+    scope?: string | null
+    hard_cap?: boolean
+  }
+  party?: {
+    adults?: number
+    children?: number
+  }
+  requested_stops?: number | null
+  transport_preference?: string
+  hard_constraints?: PlanningConstraint[]
+  soft_preferences?: PreferenceWeight[]
+  assumptions?: string[]
+  unknowns?: string[]
+  language_code?: string
+  region_code?: string
+  currency_code?: string
+}
+
 export interface TripPlanResponse {
   session_id: string
   completeness: CompletenessAssessment
   feasibility: FeasibilityAssessment
   follow_up_question?: string | null
+  recent_context?: Array<{
+    role: 'user' | 'assistant'
+    content: string
+    created_at: string
+  }>
+  planning_state?: PlanningState
   explanation: string
   warnings: string[]
   itinerary: DayPlan[]
   candidates: CandidatePlaceLite[]
   budget: BudgetEstimate
+  metadata?: {
+    itinerary_generated_at?: string
+  }
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL?.trim()
+const PLANNER_PROXY_PATH = '/api/planner/plan'
+
+const DAY_ACTIVITY_TIMES = ['09:00', '11:30', '14:30', '17:30', '20:00']
+
+const PREFERENCE_ICONS: Record<string, string> = {
+  budget: '💰',
+  transport: '🚌',
+  pace: '🚶',
+  vibe: '✨',
+  dietary: '🥗',
+  stay: '🏨',
+  group: '👤',
+  style: '🧠',
+}
+
+const getPreferenceIcon = (key: string): string => {
+  const normalized = key.toLowerCase()
+  return (
+    PREFERENCE_ICONS[normalized] ||
+    (normalized.includes('budget')
+      ? '💰'
+      : normalized.includes('food') || normalized.includes('diet')
+        ? '🥗'
+        : normalized.includes('hotel') || normalized.includes('stay') || normalized.includes('accommodation') || normalized.includes('lodging')
+          ? '🏨'
+          : '•')
+  )
+}
+
+const startCase = (value: string): string =>
+  value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+
+const getCountryLabel = (regionCode?: string): string => {
+  switch ((regionCode || '').toUpperCase()) {
+    case 'US':
+      return 'USA'
+    case 'JP':
+      return 'Japan'
+    case 'GB':
+      return 'United Kingdom'
+    case 'FR':
+      return 'France'
+    case 'IT':
+      return 'Italy'
+    case 'ES':
+      return 'Spain'
+    default:
+      return regionCode?.toUpperCase() || 'Trip plan'
+  }
+}
+
+const getHeroImageForDestination = (destination: string): string => {
+  const lower = destination.toLowerCase()
+
+  if (lower.includes('tokyo') || lower.includes('japan')) {
+    return 'https://images.unsplash.com/photo-1540959375944-7049f642e9d4?w=1600&h=1000&fit=crop'
+  }
+  if (lower.includes('vegas') || lower.includes('las vegas')) {
+    return 'https://images.unsplash.com/photo-1574219743318-5f0d79d85979?w=1600&h=1000&fit=crop'
+  }
+  if (lower.includes('vermont')) {
+    return 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=1600&h=1000&fit=crop'
+  }
+
+  return 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=1600&h=1000&fit=crop'
+}
+
+const addDays = (isoDate: string, daysToAdd: number): string => {
+  const date = new Date(isoDate)
+  date.setDate(date.getDate() + daysToAdd)
+  return date.toISOString()
+}
+
+export const mapTripPlanToItinerary = (plan: TripPlanResponse): Itinerary | null => {
+  if (!plan.itinerary.length) {
+    return null
+  }
+
+  const destination = plan.planning_state?.destination?.value?.trim() || plan.candidates[0]?.name || 'Planned trip'
+  const country = getCountryLabel(plan.planning_state?.region_code)
+  const startDate = plan.metadata?.itinerary_generated_at || new Date().toISOString()
+  const endDate = addDays(startDate, Math.max(plan.itinerary.length - 1, 0))
+  const estimatedTotal = plan.budget.estimated_total ?? null
+  const hotelNightlyEstimate =
+    estimatedTotal !== null && plan.itinerary.length > 0
+      ? Math.max(Math.round(estimatedTotal / Math.max(plan.itinerary.length, 1) / 2), 0)
+      : null
+
+  return {
+    destination,
+    country,
+    startDate,
+    endDate,
+    flights: {
+      airline: 'Flexible arrival',
+      departure: null,
+      arrival: destination,
+      price: null,
+      date: startDate,
+    },
+    hotel: {
+      name: 'Stay to be selected',
+      rating: null,
+      price: hotelNightlyEstimate,
+      image: '',
+    },
+    days: plan.itinerary.map((day, dayIndex) => ({
+      dayNumber: day.day_number,
+      date: addDays(startDate, dayIndex),
+      activities: day.stops.map((stop, stopIndex) => {
+        const transport = stop.travel_from_previous
+        const transportSummary =
+          transport && (transport.duration_minutes || transport.mode)
+            ? [
+                transport.mode ? transport.mode.toUpperCase() : null,
+                transport.duration_minutes ? `${transport.duration_minutes} min` : null,
+              ]
+                .filter(Boolean)
+                .join(' | ')
+            : null
+
+        return {
+          time: DAY_ACTIVITY_TIMES[stopIndex] ?? 'Flexible',
+          name: stop.place.name,
+          location: stop.place.address || day.theme,
+          description: transportSummary ? `${stop.rationale} Travel: ${transportSummary}.` : stop.rationale,
+        }
+      }),
+    })),
+    heroImage: getHeroImageForDestination(destination),
+  }
+}
+
+export const mapPlanningStateToPreferences = (planningState?: PlanningState): Preference[] => {
+  if (!planningState) {
+    return []
+  }
+
+  const preferences: Preference[] = []
+  const seenKeys = new Set<string>()
+  const pushPreference = (key: string, label: string, value?: string | null) => {
+    const normalizedValue = value?.trim()
+    if (!normalizedValue || seenKeys.has(key)) {
+      return
+    }
+
+    seenKeys.add(key)
+    preferences.push({
+      key,
+      label,
+      value: normalizedValue,
+      icon: getPreferenceIcon(key),
+      updated: true,
+    })
+  }
+
+  pushPreference('budget', 'Budget', planningState.budget?.level ? startCase(planningState.budget.level) : null)
+
+  if (planningState.party) {
+    const adults = planningState.party.adults ?? 1
+    const children = planningState.party.children ?? 0
+    let groupValue = 'Solo'
+    if (children > 0) {
+      groupValue = 'Family or group travel'
+    } else if (adults === 2) {
+      groupValue = 'Pair travel'
+    } else if (adults > 2) {
+      groupValue = 'Group travel'
+    }
+    pushPreference('group', 'Group', groupValue)
+  }
+
+  pushPreference(
+    'transport',
+    'Transport',
+    planningState.transport_preference ? startCase(planningState.transport_preference) : null
+  )
+
+  for (const preference of planningState.soft_preferences ?? []) {
+    const key = preference.key.toLowerCase()
+
+    if (key.includes('food') || key.includes('diet') || key.includes('vegetarian') || key.includes('vegan')) {
+      pushPreference('dietary', 'Dietary', preference.description)
+      continue
+    }
+
+    if (key.includes('pace') || key.includes('relax') || key.includes('slow') || key.includes('fast')) {
+      pushPreference('pace', 'Pace', preference.description)
+      continue
+    }
+
+    if (
+      key.includes('hotel') ||
+      key.includes('stay') ||
+      key.includes('luxury') ||
+      key.includes('hostel') ||
+      key.includes('accommodation') ||
+      key.includes('lodging')
+    ) {
+      pushPreference('stay', 'Stay', preference.description)
+      continue
+    }
+
+    if (key.includes('vibe') || key.includes('culture') || key.includes('nightlife') || key.includes('adventure')) {
+      pushPreference('vibe', 'Vibe', preference.description)
+      continue
+    }
+
+    pushPreference(key, startCase(preference.key), preference.description)
+  }
+
+  return preferences
+}
 
 const normalizeMarkdownForChat = (text: string): string =>
   text
@@ -117,11 +387,7 @@ export const inferTransportPreference = (prompt: string): TransportPreference =>
 }
 
 export const planTrip = async (payload: TravelPlanningRequest): Promise<TripPlanResponse> => {
-  if (!API_URL) {
-    throw new Error('NEXT_PUBLIC_API_URL is not configured in frontend/.env.')
-  }
-
-  const response = await fetch(`${API_URL}/api/v1/planner/plan`, {
+  const response = await fetch(PLANNER_PROXY_PATH, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -164,17 +430,20 @@ const formatStops = (day: DayPlan): string[] => {
 
 export const formatTripPlanForChat = (plan: TripPlanResponse): string => {
   const parts: string[] = []
+  const hasVisualItinerary = plan.itinerary.length > 0
 
   if (plan.follow_up_question) {
     parts.push(plan.follow_up_question)
     if (plan.completeness.missing_information.length) {
       parts.push(`Missing details: ${plan.completeness.missing_information.join(', ')}`)
     }
-  } else if (plan.explanation?.trim()) {
+  } else if (plan.explanation?.trim() && !hasVisualItinerary) {
     parts.push(normalizeMarkdownForChat(plan.explanation))
+  } else if (hasVisualItinerary) {
+    parts.push('Your itinerary is ready.')
   }
 
-  if (plan.itinerary.length) {
+  if (plan.itinerary.length && !hasVisualItinerary) {
     const snapshot: string[] = ['Itinerary Snapshot:']
     for (const day of plan.itinerary.slice(0, 2)) {
       snapshot.push(`Day ${day.day_number} (${day.theme})`)
@@ -200,4 +469,35 @@ export const formatTripPlanForChat = (plan: TripPlanResponse): string => {
   }
 
   return parts.filter(Boolean).join('\n\n').trim()
+}
+
+export const getFollowUpOptions = (plan: TripPlanResponse): string[] => {
+  const question = plan.follow_up_question?.toLowerCase() || ''
+  const missing = new Set(plan.completeness.missing_information)
+
+  if (!question) {
+    return []
+  }
+
+  if (question.includes('increase the budget cap') || question.includes('budget as a soft preference')) {
+    return ['Increase budget cap', 'Reduce trip days', 'Keep budget flexible']
+  }
+
+  if (question.includes('reduce the number of stops') || question.includes('shorten the trip duration')) {
+    return ['Reduce stops', 'Shorten trip', 'Do both']
+  }
+
+  if (missing.has('destination')) {
+    return ['Tokyo, Japan', 'Las Vegas, NV', 'Other']
+  }
+
+  if (missing.has('origin')) {
+    return ['Phoenix, AZ', 'New York City', 'Other']
+  }
+
+  if (missing.has('trip_planning_intent')) {
+    return ['Full itinerary plan', 'Quick travel answer']
+  }
+
+  return []
 }
