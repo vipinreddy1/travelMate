@@ -28,7 +28,7 @@ interface CenterPanelProps {
 
 const STARTER_PROMPTS = [
   'Plan a weekend trip from Phoenix to Las Vegas with food spots and shows.',
-  'Plan a weekend trip from Phoenix to Tokyo, Japan with great food and iconic sights.',
+  'Plan a 5 day trip from Phoenix to Tokyo, Japan with great food and iconic sights.',
   'Build me a weekend food trip with a moderate budget.',
 ]
 
