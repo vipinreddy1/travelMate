@@ -39,6 +39,11 @@ export interface Itinerary {
   days: Array<{
     dayNumber: number
     date: string
+    weather: {
+      condition: 'sunny' | 'cloudy' | 'rainy'
+      emoji: string
+      temperature: number
+    }
     activities: Array<{
       time: string
       name: string

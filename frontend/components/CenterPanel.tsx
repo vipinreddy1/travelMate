@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/store/appStore'
-import type { Message } from '@/store/appStore'
-import japanTheme from '@/images/themes/japanTheme.png'
+import type { Message, Preference } from '@/store/appStore'
 import { CompassIcon, LogOutIcon, MicIcon, SendIcon, UserIcon } from './Icons'
 import { ItineraryCard } from './ItineraryCard'
 import { cn } from '@/lib/utils'
@@ -23,6 +22,14 @@ interface CenterPanelProps {
   userName?: string
 }
 
+const STARTER_PROMPTS = [
+  'Plan a weekend trip from Phoenix to Las Vegas with food spots and shows.',
+  'Plan a weekend trip from Phoenix to Tokyo with great food and iconic sights.',
+  'Build me a weekend food trip with a moderate budget.',
+]
+
+const PACE_OPTIONS = ['Slow explorer', 'Medium explorer', 'Fast explorer']
+
 const formatPlannerPromptWithPreferences = (
   userMessage: string,
   preferences: Array<{ label: string; value: string }>
@@ -34,6 +41,38 @@ const formatPlannerPromptWithPreferences = (
   const preferenceSummary = preferences.map((preference) => `${preference.label}: ${preference.value}`).join('; ')
   return `${userMessage}\n\nTraveler preferences: ${preferenceSummary}.`
 }
+
+const cyclePacePreference = (currentValue?: string) => {
+  const normalizedCurrent = currentValue?.trim().toLowerCase()
+  const currentIndex = PACE_OPTIONS.findIndex((option) => option.toLowerCase() === normalizedCurrent)
+
+  if (currentIndex === -1) {
+    return PACE_OPTIONS[1]
+  }
+
+  return PACE_OPTIONS[(currentIndex + 1) % PACE_OPTIONS.length]
+}
+
+const normalizePresentationPreferences = (
+  nextPreferences: Preference[],
+  currentPreferences: Preference[]
+) =>
+  nextPreferences.map((preference) => {
+    if (preference.key !== 'pace') {
+      return preference
+    }
+
+    const wordCount = preference.value.trim().split(/\s+/).filter(Boolean).length
+    if (wordCount <= 2) {
+      return preference
+    }
+
+    const currentPace = currentPreferences.find((item) => item.key === 'pace')?.value
+    return {
+      ...preference,
+      value: cyclePacePreference(currentPace),
+    }
+  })
 
 export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) => {
   const [input, setInput] = useState('')
@@ -63,32 +102,8 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
   const setRecording = useAppStore((state) => state.setRecording)
   const setItineraryInlineAfterMessageId = useAppStore((state) => state.setItineraryInlineAfterMessageId)
 
-  const isJapanDestinationText = (value: string) => {
-    const normalizedValue = value.trim().toLowerCase()
-
-    return [
-      'japan',
-      'tokyo',
-      'kyoto',
-      'osaka',
-      'hokkaido',
-      'okinawa',
-      'nara',
-      'sapporo',
-      'shibuya',
-      'hakone',
-    ].some((term) => normalizedValue.includes(term))
-  }
-
-  const hasJapanTheme =
-    itinerary?.country.toLowerCase() === 'japan' ||
-    messages.some((message) => message.role === 'user' && isJapanDestinationText(message.content))
-
-  const activeDestinationLabel = itinerary
-    ? `${itinerary.destination}, ${itinerary.country}`
-    : hasJapanTheme
-      ? 'Tokyo, Japan'
-      : null
+  const activeDestinationLabel = itinerary ? `${itinerary.destination}, ${itinerary.country}` : null
+  const hasUserMessages = messages.some((message) => message.role === 'user')
 
   const isNearBottom = (element: HTMLDivElement) => {
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
@@ -155,7 +170,6 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
           "Hi! I am connected to the travel planner backend.\n\nTell me where you want to go, how long, and any preferences like food, pace, budget, and transport.",
         timestamp: new Date(),
       })
-      setInput('Plan a 1-day public transport trip from Phoenix to Tempe with coffee spots.')
     }
   }, [addMessage, userId])
 
@@ -204,7 +218,10 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
       })
 
       const mappedItinerary = mapTripPlanToItinerary(tripPlan)
-      const mappedPreferences = mapPlanningStateToPreferences(tripPlan.planning_state)
+      const mappedPreferences = normalizePresentationPreferences(
+        mapPlanningStateToPreferences(tripPlan.planning_state),
+        preferences
+      )
       const formattedContent = formatTripPlanForChat(tripPlan)
       const followUpOptions = getFollowUpOptions(tripPlan)
       const agentMessageId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -272,6 +289,11 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
     await handleUserMessage(option)
   }
 
+  const handleStarterPromptClick = (prompt: string) => {
+    setInput(prompt)
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }
+
   const handleMicToggle = () => {
     setRecording(userId, !isRecording)
   }
@@ -318,11 +340,6 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
               <p className="mt-0.5 text-xs font-medium text-teal">{activeDestinationLabel}</p>
             )}
           </div>
-          {hasJapanTheme && (
-            <div className="hidden rounded-full border border-[#d8e6e5] bg-white/75 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-teal shadow-sm sm:block">
-              Japan Mode
-            </div>
-          )}
         </div>
 
         <div className="flex items-center gap-4">
@@ -349,14 +366,6 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
 
       <div className="relative flex-1 overflow-hidden px-4 py-4">
         <div className="glass-panel relative z-10 h-full overflow-hidden rounded-[30px] border border-white/70 bg-white/48">
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 bg-cover bg-center bg-no-repeat transition-opacity duration-700 ease-out"
-            style={{
-              backgroundImage: `url(${japanTheme.src})`,
-              opacity: hasJapanTheme ? 0.7 : 0,
-            }}
-          />
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/60 via-white/42 to-white/58" />
           <div
             ref={scrollContainerRef}
@@ -415,6 +424,21 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
           </div>
           <div className="absolute inset-x-0 bottom-0 z-20 p-6">
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
+              {!hasUserMessages && (
+                <div className="flex flex-wrap gap-2 rounded-[26px] border border-white/85 bg-white/52 p-3 shadow-[0_14px_28px_rgba(15,23,42,0.08)] backdrop-blur-md">
+                  {STARTER_PROMPTS.map((prompt) => (
+                    <button
+                      key={prompt}
+                      onClick={() => handleStarterPromptClick(prompt)}
+                      disabled={isLoading}
+                      className="rounded-full border border-white/95 bg-white/94 px-4 py-2.5 text-sm font-medium text-text-primary shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-teal/50 hover:bg-white hover:text-teal disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {activeOptionsMessage && (
                 <div className="flex flex-wrap gap-2 rounded-[26px] border border-white/85 bg-white/52 p-3 shadow-[0_14px_28px_rgba(15,23,42,0.08)] backdrop-blur-md">
                   {activeOptionsMessage.options?.map((option) => (
