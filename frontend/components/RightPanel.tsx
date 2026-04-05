@@ -59,6 +59,8 @@ export const RightPanel = ({ userId }: RightPanelProps) => {
               <Link
                 key={trip.id}
                 href={tripLink}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="group block cursor-pointer transition-all duration-300 hover:translate-y-[-2px]"
               >
                 {trip.image ? (
