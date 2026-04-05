@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from time import monotonic
 
-from app.models.planning import ConversationRole, ConversationTurn, PlanningState
+from app.models.planning import (
+    ConversationRole,
+    ConversationTurn,
+    PlanningState,
+    TripPlanResponse,
+)
 
 
 @dataclass
@@ -12,11 +18,18 @@ class SessionMemory:
     incomplete_attempts: int = 0
 
 
+@dataclass
+class CachedPlannerResponse:
+    response: TripPlanResponse
+    created_at: float = field(default_factory=monotonic)
+
+
 class InMemorySessionStore:
     """Small in-process memory store for conversation context."""
 
     def __init__(self) -> None:
         self._sessions: dict[str, SessionMemory] = {}
+        self._planner_responses: dict[str, CachedPlannerResponse] = {}
 
     def append_turn(
         self,
@@ -84,3 +97,28 @@ class InMemorySessionStore:
         if session is None:
             return 0
         return len(session.turns)
+
+    def get_cached_planner_response(
+        self,
+        cache_key: str,
+        *,
+        ttl_seconds: float,
+    ) -> TripPlanResponse | None:
+        cached = self._planner_responses.get(cache_key)
+        if cached is None:
+            return None
+
+        if monotonic() - cached.created_at > ttl_seconds:
+            self._planner_responses.pop(cache_key, None)
+            return None
+
+        return cached.response.model_copy(deep=True)
+
+    def set_cached_planner_response(
+        self,
+        cache_key: str,
+        response: TripPlanResponse,
+    ) -> None:
+        self._planner_responses[cache_key] = CachedPlannerResponse(
+            response=response.model_copy(deep=True)
+        )

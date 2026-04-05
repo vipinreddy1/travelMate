@@ -38,6 +38,9 @@ class Settings(BaseModel):
     planner_max_incomplete_attempts: int = 3
     planner_response_context_limit: int = 1
     planner_request_timeout_seconds: float = 20.0
+    planner_response_cache_enabled: bool = True
+    planner_response_cache_ttl_seconds: float = 900.0
+    planner_cached_response_delay_seconds: float = 1.2
     planner_enable_google_calls: bool = True
     elevenlabs_request_timeout_seconds: float = 30.0
     cors_allow_origins: list[str] = Field(
@@ -121,6 +124,15 @@ class Settings(BaseModel):
             ),
             planner_request_timeout_seconds=float(
                 _read_value("PLANNER_REQUEST_TIMEOUT_SECONDS", "20", env_file_values)
+            ),
+            planner_response_cache_enabled=_read_bool(
+                _read_value("PLANNER_RESPONSE_CACHE_ENABLED", "true", env_file_values)
+            ),
+            planner_response_cache_ttl_seconds=float(
+                _read_value("PLANNER_RESPONSE_CACHE_TTL_SECONDS", "900", env_file_values)
+            ),
+            planner_cached_response_delay_seconds=float(
+                _read_value("PLANNER_CACHED_RESPONSE_DELAY_SECONDS", "1.2", env_file_values)
             ),
             planner_enable_google_calls=_read_bool(
                 _read_value("PLANNER_ENABLE_GOOGLE_CALLS", "true", env_file_values)

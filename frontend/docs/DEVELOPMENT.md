@@ -2,6 +2,15 @@
 
 ## Quick Start
 
+> Status note: parts of this file describe older planned work. For the current shipped planner flow, prefer `ARCHITECTURE.md`, `API_INTEGRATION.md`, and `STATE_MANAGEMENT.md`.
+
+Current reality:
+
+- the main planner flow is already integrated with FastAPI
+- the browser uses the Next.js proxy route at `/api/planner/plan`
+- Travel DNA is updated from backend `planning_state`
+- right-panel memories and some blog/trip pages still use fixture content
+
 ```bash
 cd frontend
 npm install
@@ -295,7 +304,7 @@ GET /api/trips?userId=123&tab=my|friends
 Response: Trip[]
 ```
 
-**Integration**: In `RightPanel`, replace mockTrips with React Query useQuery.
+**Current status**: `RightPanel` still uses fixture-backed trip memories from the Zustand store. Replacing that with a real backend fetch is still future work.
 
 ### Blog Post API
 ```typescript
@@ -520,13 +529,11 @@ When backend is ready, use browser DevTools → Network to inspect API calls.
 
 ## Next Steps
 
-1. **Backend Integration**: Replace mock data with API calls
-2. **Auth0 Setup**: Integrate login/logout flow
-3. **ElevenLabs**: Wire up voice input/output
-4. **React Query**: Replace Zustand for server state
-5. **Testing**: Add Jest + Playwright tests
-6. **Analytics**: Add event tracking
-7. **Mobile**: Add responsive tablet/mobile support
+1. Persist real trip memories so the right panel stops relying on seeded fixtures.
+2. Replace `/trip/[id]` mock editorial content with real or shared fixture-backed blog data.
+3. Improve backend-provided follow-up structure so quick replies are less heuristic.
+4. Add stronger frontend and backend automated test coverage.
+5. Add operational UX such as backend health status and clearer degraded-state handling.
 8. **PWA**: Add service worker for offline support
 
 ---

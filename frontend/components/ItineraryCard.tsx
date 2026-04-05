@@ -57,6 +57,12 @@ export const ItineraryCard = ({ itinerary }: ItineraryCardProps) => {
     setExpandedDays(newExpanded)
   }
 
+  const hasFlightRoute = itinerary.flights.departure && itinerary.flights.arrival
+  const hasFlightDate = Boolean(itinerary.flights.date)
+  const hasFlightPrice = itinerary.flights.price !== null && itinerary.flights.price !== undefined
+  const hasHotelRating = itinerary.hotel.rating !== null && itinerary.hotel.rating !== undefined
+  const hasHotelPrice = itinerary.hotel.price !== null && itinerary.hotel.price !== undefined
+
   return (
     <div className="glass-panel mx-auto max-w-2xl overflow-hidden rounded-[28px] border border-white/70 shadow-[0_24px_48px_rgba(15,23,42,0.1)]">
       <div
@@ -96,18 +102,26 @@ export const ItineraryCard = ({ itinerary }: ItineraryCardProps) => {
             </div>
             <div className="mb-2">
               <div className="mb-1 text-sm font-semibold text-text-primary">
-                {itinerary.flights.airline}
+                {itinerary.flights.airline ?? 'Flights not booked yet'}
               </div>
               <div className="mb-2 flex items-center gap-2 text-xs text-text-muted">
-                <span>{itinerary.flights.departure}</span>
-                <ArrowRightIcon size={14} />
-                <span>{itinerary.flights.arrival}</span>
+                {hasFlightRoute ? (
+                  <>
+                    <span>{itinerary.flights.departure}</span>
+                    <ArrowRightIcon size={14} />
+                    <span>{itinerary.flights.arrival}</span>
+                  </>
+                ) : (
+                  <span>Arrival route can be finalized later.</span>
+                )}
               </div>
-              <div className="text-lg font-bold text-teal">${itinerary.flights.price}</div>
+              <div className="text-lg font-bold text-teal">
+                {hasFlightPrice ? `$${itinerary.flights.price}` : 'TBD'}
+              </div>
             </div>
             <div className="flex items-center gap-1 text-xs text-text-muted">
               <CalendarIcon size={14} />
-              <span>{formatDate(itinerary.flights.date)}</span>
+              <span>{hasFlightDate ? formatDate(itinerary.flights.date!) : 'Choose dates'}</span>
             </div>
           </div>
 
@@ -120,17 +134,25 @@ export const ItineraryCard = ({ itinerary }: ItineraryCardProps) => {
             </div>
             <div className="mb-2">
               <div className="mb-1 text-sm font-semibold text-text-primary">
-                {itinerary.hotel.name}
+                {itinerary.hotel.name ?? 'Hotel to be selected'}
               </div>
               <div className="mb-2 flex items-center gap-1">
-                {[...Array(itinerary.hotel.rating)].map((_, i) => (
-                  <span key={i} aria-hidden="true" className="text-sm text-amber-400">
-                    *
-                  </span>
-                ))}
-                <span className="text-xs text-text-muted">({itinerary.hotel.rating}/5)</span>
+                {hasHotelRating ? (
+                  <>
+                    {[...Array(itinerary.hotel.rating!)].map((_, i) => (
+                      <span key={i} aria-hidden="true" className="text-sm text-amber-400">
+                        *
+                      </span>
+                    ))}
+                    <span className="text-xs text-text-muted">({itinerary.hotel.rating}/5)</span>
+                  </>
+                ) : (
+                  <span className="text-xs text-text-muted">Booking details can be chosen later.</span>
+                )}
               </div>
-              <div className="text-lg font-bold text-teal">${itinerary.hotel.price}/night</div>
+              <div className="text-lg font-bold text-teal">
+                {hasHotelPrice ? `$${itinerary.hotel.price}/night` : 'TBD'}
+              </div>
             </div>
           </div>
         </div>
