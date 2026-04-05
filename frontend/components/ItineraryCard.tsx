@@ -182,6 +182,19 @@ export const ItineraryCard = ({ itinerary, onCalendarExportStarted }: ItineraryC
           <span className="mx-2">•</span>
           <span>{itinerary.days.length} days</span>
         </div>
+
+        <div className="mt-5 flex flex-wrap gap-2">
+          {itinerary.days.map((day) => (
+            <div
+              key={`forecast-${day.dayNumber}`}
+              className="rounded-full border border-white bg-white/90 px-3 py-2 text-xs text-text-secondary shadow-sm"
+            >
+              <span className="font-semibold text-text-primary">Day {day.dayNumber}</span>
+              <span className="mx-2">{day.weather.emoji}</span>
+              <span>{day.weather.temperature}°</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div
@@ -194,15 +207,20 @@ export const ItineraryCard = ({ itinerary, onCalendarExportStarted }: ItineraryC
           <div key={day.dayNumber} className="bg-white/90">
             <button
               onClick={() => toggleDayExpanded(day.dayNumber)}
-              className="flex w-full items-center justify-between px-6 py-4 text-left transition-colors hover:bg-[#f8fcfc]"
+              className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left transition-colors hover:bg-[#f8fcfc]"
             >
-              <h3 className="text-sm font-semibold text-text-primary">
-                Day {day.dayNumber} - {formatDate(day.date)}
-              </h3>
+              <div className="flex min-w-0 items-center gap-3">
+                <h3 className="text-sm font-semibold text-text-primary">
+                  Day {day.dayNumber} - {formatDate(day.date)}
+                </h3>
+                <div className="rounded-full bg-[#eef7f7] px-2.5 py-1 text-xs font-medium text-text-secondary">
+                  {day.weather.emoji} {day.weather.temperature}°
+                </div>
+              </div>
               <ChevronDownIcon
                 size={18}
                 className={cn(
-                  'text-text-muted transition-transform duration-300',
+                  'shrink-0 text-text-muted transition-transform duration-300',
                   expandedDays.has(day.dayNumber) && 'rotate-180'
                 )}
               />

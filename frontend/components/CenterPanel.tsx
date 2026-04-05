@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/store/appStore'
 import type { Message } from '@/store/appStore'
-import japanTheme from '@/images/themes/japanTheme.png'
 import { CompassIcon, LogOutIcon, MicIcon, SendIcon, UserIcon } from './Icons'
 import { ItineraryCard } from './ItineraryCard'
 import { cn } from '@/lib/utils'
@@ -63,32 +62,7 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
   const setRecording = useAppStore((state) => state.setRecording)
   const setItineraryInlineAfterMessageId = useAppStore((state) => state.setItineraryInlineAfterMessageId)
 
-  const isJapanDestinationText = (value: string) => {
-    const normalizedValue = value.trim().toLowerCase()
-
-    return [
-      'japan',
-      'tokyo',
-      'kyoto',
-      'osaka',
-      'hokkaido',
-      'okinawa',
-      'nara',
-      'sapporo',
-      'shibuya',
-      'hakone',
-    ].some((term) => normalizedValue.includes(term))
-  }
-
-  const hasJapanTheme =
-    itinerary?.country.toLowerCase() === 'japan' ||
-    messages.some((message) => message.role === 'user' && isJapanDestinationText(message.content))
-
-  const activeDestinationLabel = itinerary
-    ? `${itinerary.destination}, ${itinerary.country}`
-    : hasJapanTheme
-      ? 'Tokyo, Japan'
-      : null
+  const activeDestinationLabel = itinerary ? `${itinerary.destination}, ${itinerary.country}` : null
 
   const isNearBottom = (element: HTMLDivElement) => {
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
@@ -318,11 +292,6 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
               <p className="mt-0.5 text-xs font-medium text-teal">{activeDestinationLabel}</p>
             )}
           </div>
-          {hasJapanTheme && (
-            <div className="hidden rounded-full border border-[#d8e6e5] bg-white/75 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-teal shadow-sm sm:block">
-              Japan Mode
-            </div>
-          )}
         </div>
 
         <div className="flex items-center gap-4">
@@ -349,14 +318,6 @@ export const CenterPanel = ({ userId, userEmail, userName }: CenterPanelProps) =
 
       <div className="relative flex-1 overflow-hidden px-4 py-4">
         <div className="glass-panel relative z-10 h-full overflow-hidden rounded-[30px] border border-white/70 bg-white/48">
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 bg-cover bg-center bg-no-repeat transition-opacity duration-700 ease-out"
-            style={{
-              backgroundImage: `url(${japanTheme.src})`,
-              opacity: hasJapanTheme ? 0.7 : 0,
-            }}
-          />
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/60 via-white/42 to-white/58" />
           <div
             ref={scrollContainerRef}

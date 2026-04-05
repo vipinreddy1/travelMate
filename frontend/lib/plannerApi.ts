@@ -58,6 +58,12 @@ interface DayPlan {
   stops: PlannedStop[]
 }
 
+interface MockForecast {
+  condition: 'sunny' | 'cloudy' | 'rainy'
+  emoji: string
+  temperature: number
+}
+
 interface BudgetEstimate {
   estimated_total?: number | null
   currency_code: string
@@ -223,6 +229,43 @@ const addDays = (isoDate: string, daysToAdd: number): string => {
   return date.toISOString()
 }
 
+const WEATHER_OPTIONS: MockForecast[] = [
+  { condition: 'sunny', emoji: '☀️', temperature: 78 },
+  { condition: 'cloudy', emoji: '☁️', temperature: 68 },
+  { condition: 'rainy', emoji: '🌧️', temperature: 64 },
+]
+
+const randomInt = (min: number, max: number): number =>
+  Math.floor(Math.random() * (max - min + 1)) + min
+
+const buildMockForecast = (dayCount: number): MockForecast[] => {
+  if (dayCount <= 0) {
+    return []
+  }
+
+  const forecast = Array.from({ length: dayCount }, () => {
+    const template = WEATHER_OPTIONS[randomInt(0, WEATHER_OPTIONS.length - 1)]
+    const temperatureVariance =
+      template.condition === 'sunny' ? randomInt(-4, 8) : template.condition === 'cloudy' ? randomInt(-5, 5) : randomInt(-6, 3)
+
+    return {
+      ...template,
+      temperature: template.temperature + temperatureVariance,
+    }
+  })
+
+  if (!forecast.some((day) => day.condition === 'rainy')) {
+    const rainyIndex = randomInt(0, forecast.length - 1)
+    forecast[rainyIndex] = {
+      condition: 'rainy',
+      emoji: '🌧️',
+      temperature: randomInt(58, 68),
+    }
+  }
+
+  return forecast
+}
+
 const parseActivityDateTime = (date: string, time: string): Date | null => {
   const match = time.trim().match(/^(\d{1,2}):(\d{2})$/)
   if (!match) {
@@ -295,6 +338,7 @@ export const mapTripPlanToItinerary = (plan: TripPlanResponse): Itinerary | null
     estimatedTotal !== null && plan.itinerary.length > 0
       ? Math.max(Math.round(estimatedTotal / Math.max(plan.itinerary.length, 1) / 2), 0)
       : null
+  const mockForecast = buildMockForecast(plan.itinerary.length)
 
   return {
     destination,
@@ -317,6 +361,11 @@ export const mapTripPlanToItinerary = (plan: TripPlanResponse): Itinerary | null
     days: plan.itinerary.map((day, dayIndex) => ({
       dayNumber: day.day_number,
       date: addDays(startDate, dayIndex),
+      weather: mockForecast[dayIndex] ?? {
+        condition: 'cloudy',
+        emoji: '☁️',
+        temperature: 68,
+      },
       activities: day.stops.map((stop, stopIndex) => {
         const transport = stop.travel_from_previous
         const transportSummary =
@@ -621,7 +670,7 @@ export const getFollowUpOptions = (plan: TripPlanResponse): string[] => {
   }
 
   if (missing.has('destination')) {
-    return ['Tokyo, Japan', 'Las Vegas, NV', 'Other']
+    return ['Las Vegas, NV', 'Vermont', 'Other']
   }
 
   if (missing.has('origin')) {
