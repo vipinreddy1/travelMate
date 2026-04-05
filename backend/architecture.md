@@ -34,12 +34,17 @@ Client
       -> PlannerWorkflow (sequential)
         -> Memory load
         -> Gemini planning-state extraction
+        -> Gemini execution planning (decide which tools are needed)
         -> Completeness evaluation
         -> (if incomplete and attempts < threshold) specific follow-up questions
         -> (if incomplete and attempts >= threshold) Gemini approximate itinerary
         -> Feasibility evaluation
-        -> (if complete + feasible) Places search + Routes compute + optimization
-        -> Gemini itinerary explanation
+        -> (if complete + feasible) action loop:
+           - direct answer only OR
+           - Places search (if needed)
+           - Routes compute (if needed)
+           - itinerary build (if needed)
+        -> Gemini final synthesis (grounded in whichever tool outputs were collected)
         -> Response finalize + memory append
 ```
 
@@ -89,28 +94,30 @@ Execution path:
    - uses internal sequential runner
 4. Final `TripPlanResponse` always produced through `_finalize_response()`
 
-### Happy Path API Call Order (`/plan`)
+### Typical API Call Order (`/plan`)
 
-Assuming request is complete and feasible, the API calls happen in this exact order:
+The planner no longer uses a rigid fixed order for tool calls. Instead:
 
 1. Client -> Backend: `POST /api/v1/planner/plan`
 2. Backend -> Gemini: `POST {gemini_base_url}/models/{gemini_model}:generateContent`
 Purpose: extract structured `PlanningState` from user prompt + session context.
-3. Backend -> Places (repeated per generated query): `POST {places_base_url}/places:searchText`
-Purpose: fetch candidate places for each query produced by `SearchQueryBuilder`.
-4. Backend -> Routes (repeated per transport mode and per origin/destination pair):
-`POST {routes_base_url}/directions/v2:computeRoutes`
-Purpose: compute travel legs used for route selection and itinerary ordering.
+3. Backend -> Gemini: `POST {gemini_base_url}/models/{gemini_model}:generateContent`
+Purpose: produce an execution plan (`direct_answer` / `search_places` / `compute_routes` / `build_itinerary`).
+4. Backend -> Conditional tool calls based on plan:
+   - Places (if needed): `POST {places_base_url}/places:searchText`
+   - Routes (if needed): `POST {routes_base_url}/directions/v2:computeRoutes`
 5. Backend -> Gemini: `POST {gemini_base_url}/models/{gemini_model}:generateContent`
-Purpose: generate final natural-language itinerary explanation from structured itinerary summary.
-6. Backend -> Client: return `TripPlanResponse` (planning state, candidates, itinerary, budget, explanation, metadata).
+Purpose: synthesize final response from available tool outputs.
+6. Backend -> Client: return `TripPlanResponse`.
 
 Notes:
 
-- Steps 3 and 4 are fan-out calls:
+- Places and Routes are no longer mandatory; they are invoked only if the execution plan requires them.
+- If Places and Routes are skipped, the workflow returns a direct Gemini answer.
+- When invoked, fan-out behavior still applies:
   - Places: one call per search query.
   - Routes: one call per `(origin, destination, transport mode)` combination.
-- If completeness fails, steps 3-5 are skipped.
+- If completeness fails, tool-plan and tool calls are skipped.
 - If feasibility fails, steps 3-5 are skipped.
 
 ---
@@ -132,7 +139,17 @@ File: [`app/workflows/planner_graph.py`](./app/workflows/planner_graph.py)
 - writes normalized transport preference and transport modes
 - stores planning state in memory
 
-### Step C: `_evaluate_completeness`
+### Step C: `_build execution plan` **(LLM call #2)**
+
+- calls `GeminiClient.plan_execution(...)`
+- returns action order and tool usage decisions, for example:
+  - `direct_answer`
+  - `search_places`
+  - `compute_routes`
+  - `build_itinerary`
+- this makes tool calls conditional on query intent
+
+### Step D: `_evaluate_completeness`
 
 - calls rule-based `CompletenessEvaluator.evaluate(...)`
 - determines `complete` vs `incomplete`
@@ -142,37 +159,39 @@ File: [`app/workflows/planner_graph.py`](./app/workflows/planner_graph.py)
 - missing-detail priority order is fixed as:
   - `destination` -> `origin`
 
-### Step D: `_evaluate_feasibility`
+### Step E: `_evaluate_feasibility`
 
 - only reached if completeness is `complete`
 - calls rule-based `FeasibilityEvaluator.evaluate(...)`
 - determines `feasible` vs `not_feasible`
 
-### Step E: `_build_plan` (only if complete + feasible)
+### Step F: `_build_plan` (only if complete + feasible)
 
 Data processing stages:
 
-1. Query generation:
+1. Execution-plan action loop:
+   - runs actions from `GeminiClient.plan_execution(...)`, bounded by `PLANNER_AGENT_MAX_STEPS`
+2. Query generation (if `search_places` is selected):
    - `SearchQueryBuilder.build_queries(planning_state, origin, destination)`
    - includes route-aware queries for "along the way / on the way / en route" prompts
-2. Candidate collection:
+3. Candidate collection:
    - `_collect_candidates()` -> `PlacesClient.search_text(...)` per query
    - dedupe by `place_id`
-3. Candidate scoring + shortlist:
+4. Candidate scoring + shortlist:
    - `ItineraryOptimizer.shortlist_candidates(...)`
    - applies exclusion constraints (for example "exclude X")
-4. Route evaluation by transport mode:
+5. Route evaluation by transport mode (if `compute_routes` is selected):
    - `RoutesClient.compute_route_maps_for_modes(...)`
    - evaluates all requested/effective modes
    - computes an origin->destination route overview when both endpoints can be resolved
-5. Route option selection:
+6. Route option selection:
    - `_select_route_map()` + `_choose_route_option()`
    - selection strategy depends on `transport_preference`
-6. Itinerary build:
+7. Itinerary build (if `build_itinerary` is selected):
    - `ItineraryOptimizer.build_itinerary(...)`
-7. Budget estimate:
+8. Budget estimate:
    - `ItineraryOptimizer.estimate_budget(...)`
-8. Explanation generation **(LLM call #2)**:
+9. Explanation generation **(LLM call #3 for full path)**:
    - `GeminiClient.explain_itinerary(...)`
    - final prompt includes:
      - route overview from Routes API
@@ -188,7 +207,7 @@ Special branch:
 
 - if zero Places candidates found, workflow marks request as `not_feasible` and returns guidance question without itinerary.
 
-### Step F: `_finalize_response`
+### Step G: `_finalize_response`
 
 - central response builder for all outcomes:
   - incomplete
@@ -217,6 +236,20 @@ If Gemini is disabled or missing key:
 
 - uses local heuristic parser (`_heuristic_planning_state`)
 
+### `plan_execution(...)`
+
+- endpoint called: `POST {gemini_base_url}/models/{gemini_model}:generateContent`
+- creates a tool-usage plan that decides whether to:
+  - answer directly
+  - call Places
+  - call Routes
+  - build itinerary
+- supports ordered action execution and focus hints
+
+If Gemini is disabled or missing key:
+
+- uses local heuristic execution planning (`_heuristic_execution_plan`)
+
 ### `explain_itinerary(...)`
 
 - endpoint called: same Gemini `generateContent`
@@ -229,6 +262,11 @@ If Gemini is disabled or missing key:
 If Gemini is disabled or missing key:
 
 - uses local explanation fallback (`_fallback_explanation`)
+
+### `answer_without_tools(...)`
+
+- endpoint called: same Gemini `generateContent`
+- used when execution plan selects `direct_answer` and no map calls are needed
 
 ---
 
@@ -248,6 +286,12 @@ File: [`app/clients/maps.py`](./app/clients/maps.py)
 - endpoint: `POST {routes_base_url}/directions/v2:computeRoutes`
 - called pairwise for each shortlisted origin/destination and mode
 - supports `DRIVE`, `TRANSIT`, `WALK`, `BICYCLE` mode mapping
+- for transit routes, the client now extracts step-level commute details when available:
+  - departure/arrival station
+  - line name and headsign
+  - stop count
+  - walk-to-station and walk-from-station minutes
+  - step-by-step instructions
 
 If routes are unavailable (or Google calls disabled):
 
@@ -344,6 +388,7 @@ Key runtime flags:
 - `GEMINI_API_KEY`
 - `MAPS_API_KEY`
 - `PLANNER_ENABLE_GOOGLE_CALLS`
+- `PLANNER_AGENT_MAX_STEPS`
 - `GEMINI_MODEL`
 - defaults for language/region/currency
 

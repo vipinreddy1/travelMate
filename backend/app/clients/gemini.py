@@ -35,6 +35,24 @@ When the request is too vague to materialize an itinerary, put required missing 
 Prefer asking for follow-up information through unknowns rather than guessing.
 """.strip()
 
+EXECUTION_PLAN_SYSTEM_PROMPT = """
+You are a planning controller for a travel assistant.
+Choose which tools to call for the current user request.
+
+Available tools:
+- places_search: find candidate places and food spots
+- routes_compute: compute travel routes/times between points
+- itinerary_builder: organize selected places into a day-wise plan
+
+Rules:
+- Only request a tool if it is necessary.
+- If the user only needs a direct answer from existing context, do not request map tools.
+- If user asks for "along the way / on the way / route" guidance, routes_compute is usually needed.
+- If user asks for recommendations (food/places/attractions), places_search is usually needed, you can call route_compute if user asks for place near a location or along a route.
+- itinerary_builder should be requested only when a day-by-day or stop-by-stop itinerary is needed.
+- Return JSON only.
+""".strip()
+
 
 class GeminiClient(BaseGoogleClient):
     async def extract_planning_state(
@@ -134,6 +152,76 @@ Defaults:
 
         return planning_state
 
+    async def plan_execution(
+        self,
+        *,
+        raw_request: str,
+        planning_state: PlanningState,
+        context_block: str = "",
+    ) -> dict[str, Any]:
+        if not self.settings.planner_enable_google_calls or not self.settings.gemini_api_key_value:
+            return self._heuristic_execution_plan(
+                raw_request=raw_request,
+                planning_state=planning_state,
+            )
+
+        planning_prompt = f"""
+Current user request:
+{raw_request}
+
+Planning state:
+{planning_state.model_dump_json(indent=2)}
+
+Recent context:
+{context_block or "(none)"}
+
+Return a JSON object with keys:
+- direct_answer_only: boolean
+- use_places: boolean
+- use_routes: boolean
+- build_itinerary: boolean
+- search_focus: array of strings
+- action_order: array containing only:
+  - "direct_answer"
+  - "search_places"
+  - "compute_routes"
+  - "build_itinerary"
+- reasoning: short string
+
+Constraints:
+- If direct_answer_only is true, action_order should be ["direct_answer"].
+- If use_routes is true for route-oriented requests, include "compute_routes".
+- If user asks for recommendations, include "search_places".
+""".strip()
+
+        url = (
+            f"{self.settings.gemini_base_url}/models/"
+            f"{self.settings.gemini_model}:generateContent"
+        )
+        payload = {
+            "system_instruction": {
+                "parts": [{"text": EXECUTION_PLAN_SYSTEM_PROMPT}],
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": planning_prompt}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.1,
+                "responseMimeType": "application/json",
+            },
+        }
+        data = await self.post_json(
+            url,
+            json_payload=payload,
+            params={"key": self.require_gemini_api_key()},
+        )
+        raw_text = self._extract_text(data)
+        parsed = self._load_json(raw_text)
+        return self._normalize_execution_plan(parsed, raw_request=raw_request)
+
     async def explain_itinerary(
         self,
         *,
@@ -171,8 +259,15 @@ Requirements:
   2) Places Along The Way
   3) Suggested Itinerary
   4) Notes And Tradeoffs
-- "How To Get There" must use route_overview if present (mode, duration, and any notable note).
+- "How To Get There" must use route_overview if present:
+  - include mode, duration, and commute detail
+  - for transit include line, departure/arrival station, headsign, stop count, and any walk-to/from-station minutes when available
+  - for driving include a concise driving commute summary
+  - when route details are unavailable, provide a best-effort generic commute suggestion and clearly say it is estimated
 - "Places Along The Way" must list specific place names from itinerary/candidate data; include brief why-visit.
+  If no place data is available, explicitly state that places data is unavailable.
+- "Suggested Itinerary" must be step-by-step and include transport transitions between stops.
+- If step_instructions are provided in itinerary_summary/route_overview, use them verbatim or lightly rephrase.
 - Mention at least one concrete food stop when user intent includes food keywords.
 - Respect any exclusion constraints from planning_state.hard_constraints.
 - Do not invent facts, routes, venues, or prices outside the provided data.
@@ -191,6 +286,52 @@ Requirements:
                 }
             ],
             "generationConfig": {"temperature": 0.4},
+        }
+        data = await self.post_json(
+            url,
+            json_payload=payload,
+            params={"key": self.require_gemini_api_key()},
+        )
+        return self._extract_text(data).strip()
+
+    async def answer_without_tools(
+        self,
+        *,
+        raw_request: str,
+        planning_state: PlanningState,
+        context_block: str = "",
+    ) -> str:
+        if not self.settings.planner_enable_google_calls or not self.settings.gemini_api_key_value:
+            return self._fallback_direct_answer(raw_request)
+
+        prompt = f"""
+You are a travel assistant. Answer the user's latest request directly using only known context.
+Do not invent route times, place ratings, or specific venues not present in the prompt/context.
+
+Latest request:
+{raw_request}
+
+Planning state:
+{planning_state.model_dump_json(indent=2)}
+
+Recent context:
+{context_block or "(none)"}
+
+Keep the answer concise and practical.
+""".strip()
+
+        url = (
+            f"{self.settings.gemini_base_url}/models/"
+            f"{self.settings.gemini_model}:generateContent"
+        )
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}],
+                }
+            ],
+            "generationConfig": {"temperature": 0.3},
         }
         data = await self.post_json(
             url,
@@ -354,6 +495,159 @@ Requirements:
         }
         return mapping.get(normalized, "optimize_for_time")
 
+    def _normalize_execution_plan(
+        self,
+        payload: dict[str, Any],
+        *,
+        raw_request: str,
+    ) -> dict[str, Any]:
+        normalized = {
+            "direct_answer_only": bool(payload.get("direct_answer_only", False)),
+            "use_places": bool(payload.get("use_places", False)),
+            "use_routes": bool(payload.get("use_routes", False)),
+            "build_itinerary": bool(payload.get("build_itinerary", False)),
+            "search_focus": [
+                str(item).strip()
+                for item in (payload.get("search_focus") or [])
+                if str(item).strip()
+            ],
+            "reasoning": str(payload.get("reasoning", "")).strip(),
+        }
+
+        requested_order = payload.get("action_order") or []
+        valid_actions = {
+            "direct_answer",
+            "search_places",
+            "compute_routes",
+            "build_itinerary",
+        }
+        action_order = [
+            str(action).strip()
+            for action in requested_order
+            if str(action).strip() in valid_actions
+        ]
+
+        if normalized["direct_answer_only"]:
+            normalized["use_places"] = False
+            normalized["use_routes"] = False
+            normalized["build_itinerary"] = False
+            normalized["action_order"] = ["direct_answer"]
+            return normalized
+
+        if not action_order:
+            action_order = []
+            if normalized["use_places"]:
+                action_order.append("search_places")
+            if normalized["use_routes"]:
+                action_order.append("compute_routes")
+            if normalized["build_itinerary"]:
+                action_order.append("build_itinerary")
+
+        if not action_order:
+            # Fail-safe: do not burn map calls for ambiguous plans
+            heuristic = self._heuristic_execution_plan(
+                raw_request=raw_request,
+                planning_state=None,
+            )
+            return heuristic
+
+        normalized["action_order"] = action_order
+        return normalized
+
+    def _heuristic_execution_plan(
+        self,
+        *,
+        raw_request: str,
+        planning_state: PlanningState | None,
+    ) -> dict[str, Any]:
+        request = raw_request.lower()
+        recommendation_markers = (
+            "recommend",
+            "suggest",
+            "where should",
+            "where to",
+            "find",
+            "eat",
+            "visit",
+            "along the way",
+            "on the way",
+            "itinerary",
+            "plan",
+            "stops",
+        )
+        route_markers = (
+            "from ",
+            " to ",
+            "along the way",
+            "on the way",
+            "en route",
+            "route",
+            "commute",
+        )
+        direct_markers = (
+            "what is",
+            "when is",
+            "how to",
+            "tips",
+            "advice",
+            "explain",
+        )
+
+        asks_recommendations = any(marker in request for marker in recommendation_markers)
+        asks_route = any(marker in request for marker in route_markers)
+        asks_direct = any(request.strip().startswith(marker) for marker in direct_markers)
+
+        if planning_state and planning_state.intent_type == IntentType.ASK_TRAVEL_QUESTION and not asks_recommendations:
+            return {
+                "direct_answer_only": True,
+                "use_places": False,
+                "use_routes": False,
+                "build_itinerary": False,
+                "search_focus": [],
+                "action_order": ["direct_answer"],
+                "reasoning": "Question can be answered directly from context without map tools.",
+            }
+
+        if asks_direct and not asks_recommendations and not asks_route:
+            return {
+                "direct_answer_only": True,
+                "use_places": False,
+                "use_routes": False,
+                "build_itinerary": False,
+                "search_focus": [],
+                "action_order": ["direct_answer"],
+                "reasoning": "Direct informational query; tool calls are unnecessary.",
+            }
+
+        search_focus = []
+        for term in ("ramen", "dosa", "biryani", "sushi", "cafe", "museum", "temple", "park"):
+            if term in request:
+                search_focus.append(term)
+
+        use_places = asks_recommendations
+        use_routes = asks_route
+        build_itinerary = any(token in request for token in ("itinerary", "plan", "day", "stops"))
+
+        actions: list[str] = []
+        if use_places:
+            actions.append("search_places")
+        if use_routes:
+            actions.append("compute_routes")
+        if build_itinerary:
+            actions.append("build_itinerary")
+        if not actions:
+            actions = ["direct_answer"]
+
+        return {
+            "direct_answer_only": actions == ["direct_answer"],
+            "use_places": use_places,
+            "use_routes": use_routes,
+            "build_itinerary": build_itinerary,
+            "search_focus": search_focus,
+            "action_order": actions,
+            "reasoning": "Heuristic execution plan used.",
+        }
+
     def _heuristic_planning_state(
         self,
         *,
@@ -505,6 +799,12 @@ Requirements:
             "cluster nearby attractions, and prioritize highly rated places that match your top preferences. "
             "This is a rough draft because key details are missing. "
             f"To improve this plan, share: {missing}."
+        )
+
+    def _fallback_direct_answer(self, raw_request: str) -> str:
+        return (
+            "Here is a quick answer based on your latest request and existing context. "
+            "For grounded place and route details, ask for recommendations or itinerary generation."
         )
 
     def _infer_budget_level(

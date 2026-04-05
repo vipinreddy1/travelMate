@@ -37,6 +37,7 @@ class Settings(BaseModel):
     planner_shortlist_size: int = 8
     planner_max_incomplete_attempts: int = 3
     planner_response_context_limit: int = 1
+    planner_agent_max_steps: int = 4
     planner_request_timeout_seconds: float = 20.0
     planner_enable_google_calls: bool = True
     elevenlabs_request_timeout_seconds: float = 30.0
@@ -109,6 +110,9 @@ class Settings(BaseModel):
             ),
             planner_response_context_limit=int(
                 _read_value("PLANNER_RESPONSE_CONTEXT_LIMIT", "1", env_file_values)
+            ),
+            planner_agent_max_steps=int(
+                _read_value("PLANNER_AGENT_MAX_STEPS", "4", env_file_values)
             ),
             planner_request_timeout_seconds=float(
                 _read_value("PLANNER_REQUEST_TIMEOUT_SECONDS", "20", env_file_values)

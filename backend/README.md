@@ -11,7 +11,7 @@ A clean FastAPI scaffold for a travel planner that uses:
 - `POST /api/v1/planner/test-simple-gemini`
   - Converts natural-language travel requests into a flexible planning state
 - `POST /api/v1/planner/plan`
-  - Completeness + feasibility gated planning with memory, then itinerary generation from Gemini + Places + Routes
+  - Completeness + feasibility gated planning with memory, then an execution-plan loop that conditionally calls Gemini/Places/Routes
 - `GET /api/v1/health`
   - Returns service and configuration status
 
@@ -37,6 +37,7 @@ The service is split into a few readable layers:
 - User input
 - Session memory load/write (by `session_id`)
 - Planning-state extraction (Gemini)
+- Execution planning (Gemini decides whether to call Places/Routes or answer directly)
 - Completeness evaluator
   - If incomplete: return specific missing-detail follow-up prompts
   - After repeated incomplete attempts, return an approximate itinerary draft
@@ -44,8 +45,12 @@ The service is split into a few readable layers:
 - Feasibility evaluator
   - If not feasible: return follow-up question and stop
   - If feasible: continue
-- Places + Routes calls (only when complete and feasible)
-- Final itinerary and explanation
+- Conditional tool loop (only when complete and feasible):
+  - direct answer, or
+  - Places search, or
+  - Routes compute, or
+  - itinerary build
+- Final response synthesis (Gemini)
 
 Implementation detail:
 
@@ -119,7 +124,9 @@ If omitted, the API defaults to `optimize_for_time`.
 
 - The `test-simple-gemini` endpoint can fall back to a simple heuristic parser when Gemini is not configured.
 - Full itinerary generation requires valid Google Places and Routes access.
+- Transit responses include station/line/step commute details when Routes API returns them; otherwise the planner falls back to estimated guidance.
 - The `/plan` response includes both completeness and feasibility status, plus optional follow-up questions when more detail is needed.
 - The `/plan` response also includes `session_id`, `recent_context`, and metadata such as `workflow_engine` and `session_turn_count`.
 - `PLANNER_MAX_INCOMPLETE_ATTEMPTS` controls when incomplete sessions switch to an approximate Gemini-generated itinerary.
+- `PLANNER_AGENT_MAX_STEPS` limits how many actions the planning loop executes per request.
 - The optimizer is intentionally lightweight for readability. It is a good foundation for later replacement with OR-Tools or a stronger constraint solver.

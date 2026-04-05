@@ -163,6 +163,15 @@ class TravelStep(BaseModel):
     distance_meters: int | None = None
     cost_estimate: float | None = None
     note: str | None = None
+    departure_stop: str | None = None
+    arrival_stop: str | None = None
+    transit_line: str | None = None
+    transit_headsign: str | None = None
+    transit_stop_count: int | None = None
+    vehicle_type: str | None = None
+    walk_to_station_minutes: int | None = None
+    walk_from_station_minutes: int | None = None
+    step_instructions: list[str] = Field(default_factory=list)
 
 
 class PlannedStop(BaseModel):

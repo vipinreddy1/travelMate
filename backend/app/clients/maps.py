@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 from typing import Iterable
 
 from app.clients.base import BaseGoogleClient, GoogleAPIError
@@ -167,6 +168,13 @@ class RoutesClient(BaseGoogleClient):
                     "routes.duration",
                     "routes.distanceMeters",
                     "routes.travelAdvisory",
+                    "routes.legs.duration",
+                    "routes.legs.distanceMeters",
+                    "routes.legs.steps.distanceMeters",
+                    "routes.legs.steps.staticDuration",
+                    "routes.legs.steps.travelMode",
+                    "routes.legs.steps.navigationInstruction.instructions",
+                    "routes.legs.steps.transitDetails",
                 ]
             ),
         }
@@ -185,6 +193,9 @@ class RoutesClient(BaseGoogleClient):
         note = None
         if advisory.get("tollInfo"):
             note = "Route may include tolls."
+        transit_details = self._extract_transit_details(route)
+        walk_to_station_minutes, walk_from_station_minutes = self._extract_station_walk_minutes(route)
+        step_instructions = self._extract_step_instructions(route, mode)
         cost_estimate = self._estimate_cost(
             mode=mode,
             distance_meters=route.get("distanceMeters"),
@@ -196,6 +207,15 @@ class RoutesClient(BaseGoogleClient):
             distance_meters=route.get("distanceMeters"),
             cost_estimate=cost_estimate,
             note=note,
+            departure_stop=transit_details.get("departure_stop"),
+            arrival_stop=transit_details.get("arrival_stop"),
+            transit_line=transit_details.get("transit_line"),
+            transit_headsign=transit_details.get("transit_headsign"),
+            transit_stop_count=transit_details.get("transit_stop_count"),
+            vehicle_type=transit_details.get("vehicle_type"),
+            walk_to_station_minutes=walk_to_station_minutes,
+            walk_from_station_minutes=walk_from_station_minutes,
+            step_instructions=step_instructions,
         )
 
     def _waypoint(self, place: CandidatePlace) -> dict[str, object]:
@@ -239,12 +259,18 @@ class RoutesClient(BaseGoogleClient):
         }
         speed = speeds_kmh[mode]
         duration_minutes = max(1, round((distance_meters / 1000) / speed * 60))
+        instructions: list[str] = []
+        if mode == TransportMode.TRANSIT:
+            instructions.append(
+                "Transit details unavailable; use a local transit app for exact line/station guidance."
+            )
         return TravelStep(
             mode=mode,
             duration_minutes=duration_minutes,
             distance_meters=round(distance_meters),
             cost_estimate=self._estimate_cost(mode=mode, distance_meters=round(distance_meters)),
             note="Estimated locally because Google routing was unavailable.",
+            step_instructions=instructions,
         )
 
     def _estimate_cost(
@@ -277,3 +303,173 @@ class RoutesClient(BaseGoogleClient):
             + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lng / 2) ** 2
         )
         return 2 * radius * math.asin(math.sqrt(haversine))
+
+    def _extract_transit_details(self, route: dict[str, object]) -> dict[str, object]:
+        legs = route.get("legs") or []
+        for leg in legs:
+            steps = leg.get("steps") or []
+            for step in steps:
+                transit_details = step.get("transitDetails") or step.get("transit_details") or {}
+                if not transit_details:
+                    continue
+
+                stop_details = transit_details.get("stopDetails") or {}
+                departure_stop = (
+                    (stop_details.get("departureStop") or {}).get("name")
+                    or (transit_details.get("departureStop") or {}).get("name")
+                )
+                arrival_stop = (
+                    (stop_details.get("arrivalStop") or {}).get("name")
+                    or (transit_details.get("arrivalStop") or {}).get("name")
+                )
+                transit_line = self._extract_transit_line_name(transit_details)
+                return {
+                    "departure_stop": departure_stop,
+                    "arrival_stop": arrival_stop,
+                    "transit_line": transit_line,
+                    "transit_headsign": transit_details.get("headsign"),
+                    "transit_stop_count": transit_details.get("stopCount"),
+                    "vehicle_type": self._extract_vehicle_type(transit_details),
+                }
+
+        return {
+            "departure_stop": None,
+            "arrival_stop": None,
+            "transit_line": None,
+            "transit_headsign": None,
+            "transit_stop_count": None,
+            "vehicle_type": None,
+        }
+
+    def _extract_transit_line_name(self, transit_details: dict[str, object]) -> str | None:
+        line = transit_details.get("transitLine") or transit_details.get("transit_line") or {}
+        name_short = line.get("nameShort") or line.get("name_short")
+        name = line.get("name")
+        return name_short or name
+
+    def _extract_vehicle_type(self, transit_details: dict[str, object]) -> str | None:
+        line = transit_details.get("transitLine") or transit_details.get("transit_line") or {}
+        vehicle = line.get("vehicle") or {}
+        vehicle_type = vehicle.get("type")
+        if not vehicle_type:
+            return None
+        return str(vehicle_type)
+
+    def _extract_station_walk_minutes(self, route: dict[str, object]) -> tuple[int | None, int | None]:
+        legs = route.get("legs") or []
+        if not legs:
+            return (None, None)
+        steps = legs[0].get("steps") or []
+        if not steps:
+            return (None, None)
+
+        first_transit_index = None
+        last_transit_index = None
+        for index, step in enumerate(steps):
+            mode = str(step.get("travelMode") or "").upper()
+            has_transit = bool(step.get("transitDetails") or step.get("transit_details"))
+            if mode == "TRANSIT" or has_transit:
+                if first_transit_index is None:
+                    first_transit_index = index
+                last_transit_index = index
+
+        if first_transit_index is None:
+            return (None, None)
+
+        walk_before = 0
+        for step in steps[:first_transit_index]:
+            if str(step.get("travelMode") or "").upper() == "WALK":
+                walk_before += self._duration_to_minutes(
+                    step.get("staticDuration") or step.get("duration")
+                )
+
+        walk_after = 0
+        if last_transit_index is not None:
+            for step in steps[last_transit_index + 1 :]:
+                if str(step.get("travelMode") or "").upper() == "WALK":
+                    walk_after += self._duration_to_minutes(
+                        step.get("staticDuration") or step.get("duration")
+                    )
+
+        return (
+            walk_before if walk_before > 0 else None,
+            walk_after if walk_after > 0 else None,
+        )
+
+    def _extract_step_instructions(
+        self,
+        route: dict[str, object],
+        mode: TransportMode,
+    ) -> list[str]:
+        legs = route.get("legs") or []
+        instructions: list[str] = []
+        for leg in legs:
+            steps = leg.get("steps") or []
+            for step in steps:
+                instruction = (step.get("navigationInstruction") or {}).get("instructions")
+                transit_details = step.get("transitDetails") or step.get("transit_details") or {}
+                travel_mode = str(step.get("travelMode") or "").upper()
+                if transit_details:
+                    formatted = self._format_transit_instruction(transit_details)
+                    if formatted:
+                        instructions.append(formatted)
+                        continue
+                if instruction:
+                    normalized = self._normalize_instruction(instruction)
+                    if normalized:
+                        instructions.append(normalized)
+                        continue
+                if travel_mode == "WALK":
+                    minutes = self._duration_to_minutes(step.get("staticDuration") or step.get("duration"))
+                    if minutes is not None:
+                        instructions.append(f"Walk for about {minutes} minute(s).")
+                elif travel_mode == "DRIVE" and mode == TransportMode.DRIVE:
+                    minutes = self._duration_to_minutes(step.get("staticDuration") or step.get("duration"))
+                    if minutes is not None:
+                        instructions.append(f"Drive for about {minutes} minute(s).")
+        deduped: list[str] = []
+        for instruction in instructions:
+            if instruction not in deduped:
+                deduped.append(instruction)
+        return deduped
+
+    def _format_transit_instruction(self, transit_details: dict[str, object]) -> str | None:
+        stop_details = transit_details.get("stopDetails") or {}
+        departure_stop = (
+            (stop_details.get("departureStop") or {}).get("name")
+            or (transit_details.get("departureStop") or {}).get("name")
+        )
+        arrival_stop = (
+            (stop_details.get("arrivalStop") or {}).get("name")
+            or (transit_details.get("arrivalStop") or {}).get("name")
+        )
+        line = self._extract_transit_line_name(transit_details)
+        headsign = transit_details.get("headsign")
+        stop_count = transit_details.get("stopCount")
+
+        line_part = line or "the transit line"
+        departure_part = departure_stop or "the departure stop"
+        arrival_part = arrival_stop or "the arrival stop"
+
+        text = f"Take {line_part} from {departure_part} to {arrival_part}"
+        if headsign:
+            text += f" toward {headsign}"
+        if stop_count is not None:
+            text += f" ({stop_count} stops)"
+        return text + "."
+
+    def _normalize_instruction(self, instruction: str) -> str | None:
+        cleaned = re.sub(r"\s+", " ", instruction).strip()
+        if not cleaned:
+            return None
+        if not cleaned.endswith("."):
+            cleaned += "."
+        return cleaned
+
+    def _duration_to_minutes(self, raw_duration: object) -> int | None:
+        if raw_duration is None:
+            return None
+        seconds = self._duration_to_seconds(str(raw_duration))
+        if seconds <= 0:
+            return None
+        return max(1, round(seconds / 60))

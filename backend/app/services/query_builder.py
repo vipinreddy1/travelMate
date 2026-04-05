@@ -28,6 +28,7 @@ class SearchQueryBuilder:
         *,
         origin: str | None = None,
         destination: str | None = None,
+        extra_focus: list[str] | None = None,
     ) -> list[str]:
         destination = destination or planning_state.destination.value
         queries = [f"best attractions and experiences in {destination}"]
@@ -44,6 +45,11 @@ class SearchQueryBuilder:
                 queries.append(f"{fragment} in {destination}")
 
         focus_terms = self._focus_terms(planning_state)
+        if extra_focus:
+            for term in extra_focus:
+                normalized = term.strip().lower()
+                if normalized and normalized not in focus_terms:
+                    focus_terms.append(normalized)
         for term in focus_terms[:3]:
             queries.append(f"best {term} in {destination}")
 

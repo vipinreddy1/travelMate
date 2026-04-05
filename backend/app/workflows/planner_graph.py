@@ -37,8 +37,10 @@ class PlannerGraphState(TypedDict, total=False):
     planning_state: PlanningState
     completeness: CompletenessAssessment
     feasibility: FeasibilityAssessment
+    execution_plan: dict[str, Any]
     search_queries: list[str]
     origin: str | None
+    tool_trace: list[str]
     candidates: list[CandidatePlace]
     itinerary_summary: list[dict[str, Any]]
     route_overview: dict[str, Any] | None
@@ -202,32 +204,148 @@ class PlannerWorkflow:
         request = state["request"]
         origin = state.get("origin")
         destination = planning_state.destination.value
-
-        search_queries = self.query_builder.build_queries(
-            planning_state,
-            origin=origin,
-            destination=destination,
-        )
-        per_query_limit = max(
-            4,
-            self.settings.planner_candidate_limit // max(1, len(search_queries)),
-        )
-        candidates = await self._collect_candidates(
-            search_queries=search_queries,
+        context_block = state.get("context_block", "")
+        execution_plan = await self.gemini_client.plan_execution(
+            raw_request=request.prompt,
             planning_state=planning_state,
-            per_query_limit=per_query_limit,
+            context_block=context_block,
         )
-        if not candidates:
+        max_steps = max(1, self.settings.planner_agent_max_steps)
+        action_order = list(execution_plan.get("action_order") or [])[:max_steps]
+
+        warnings: list[str] = []
+        tool_trace: list[str] = []
+        search_queries: list[str] = []
+        candidates: list[CandidatePlace] = []
+        shortlist: list[CandidatePlace] = []
+        route_map: dict[tuple[str, str], TravelStep] = {}
+        route_overview: dict[str, Any] | None = None
+        itinerary: list[Any] = []
+        budget = BudgetEstimate(
+            estimated_total=None,
+            currency_code=planning_state.currency_code,
+            confidence="low",
+            notes=[
+                "No itinerary-level cost estimate was computed for this response.",
+            ],
+        )
+        evaluated_modes = self._resolve_transport_modes(planning_state.transport_preference)
+
+        for action in action_order:
+            tool_trace.append(action)
+
+            if action == "direct_answer":
+                explanation = await self.gemini_client.answer_without_tools(
+                    raw_request=request.prompt,
+                    planning_state=planning_state,
+                    context_block=context_block,
+                )
+                metadata = PlanMetadata(
+                    search_queries=[],
+                    candidate_count=0,
+                    shortlist_count=0,
+                    transport_preference=planning_state.transport_preference,
+                    primary_transport_mode=evaluated_modes[0],
+                    evaluated_transport_modes=evaluated_modes,
+                    workflow_engine=self.workflow_engine,
+                )
+                warnings.extend(self._base_warnings(planning_state))
+                return {
+                    "execution_plan": execution_plan,
+                    "tool_trace": tool_trace,
+                    "search_queries": [],
+                    "candidates": [],
+                    "itinerary": [],
+                    "budget": budget,
+                    "explanation": explanation,
+                    "warnings": warnings,
+                    "metadata": metadata,
+                    "route_overview": None,
+                }
+
+            if action == "search_places":
+                search_queries = self.query_builder.build_queries(
+                    planning_state,
+                    origin=origin,
+                    destination=destination,
+                    extra_focus=execution_plan.get("search_focus"),
+                )
+                per_query_limit = max(
+                    4,
+                    self.settings.planner_candidate_limit // max(1, len(search_queries)),
+                )
+                candidates = await self._collect_candidates(
+                    search_queries=search_queries,
+                    planning_state=planning_state,
+                    per_query_limit=per_query_limit,
+                )
+                if candidates:
+                    shortlist = self.optimizer.shortlist_candidates(planning_state, candidates)
+                else:
+                    warnings.append("Google Places returned zero results for the generated queries.")
+
+            if action == "compute_routes":
+                if route_overview is None:
+                    route_overview = await self._build_origin_destination_route_overview(
+                        planning_state=planning_state,
+                        origin=origin,
+                        destination=destination,
+                        evaluated_modes=evaluated_modes,
+                    )
+                if len(shortlist) >= 2:
+                    route_maps_by_mode = await self.routes_client.compute_route_maps_for_modes(
+                        places=shortlist,
+                        modes=evaluated_modes,
+                        language_code=planning_state.language_code,
+                    )
+                    route_map = self._select_route_map(
+                        planning_state=planning_state,
+                        route_maps_by_mode=route_maps_by_mode,
+                    )
+
+            if action == "build_itinerary":
+                if not shortlist and candidates:
+                    shortlist = self.optimizer.shortlist_candidates(planning_state, candidates)
+                if shortlist and len(shortlist) >= 2 and not route_map:
+                    route_maps_by_mode = await self.routes_client.compute_route_maps_for_modes(
+                        places=shortlist,
+                        modes=evaluated_modes,
+                        language_code=planning_state.language_code,
+                    )
+                    route_map = self._select_route_map(
+                        planning_state=planning_state,
+                        route_maps_by_mode=route_maps_by_mode,
+                    )
+                if shortlist:
+                    itinerary = self.optimizer.build_itinerary(
+                        planning_state=planning_state,
+                        candidates=shortlist,
+                        route_map=route_map,
+                    )
+                if itinerary:
+                    budget = self.optimizer.estimate_budget(planning_state, itinerary)
+
+        if execution_plan.get("use_places") and not shortlist:
             fallback_feasibility = FeasibilityAssessment(
                 status=FeasibilityStatus.NOT_FEASIBLE,
-                reason=(
-                    "The current destination/preferences returned no place matches."
-                ),
+                reason="The current destination/preferences returned no place matches.",
                 follow_up_question=(
                     "Could you share a more specific destination area or one must-visit place?"
                 ),
             )
+            metadata = PlanMetadata(
+                search_queries=search_queries,
+                candidate_count=0,
+                shortlist_count=0,
+                transport_preference=planning_state.transport_preference,
+                primary_transport_mode=evaluated_modes[0],
+                evaluated_transport_modes=evaluated_modes,
+                workflow_engine=self.workflow_engine,
+            )
+            warnings.extend(self._base_warnings(planning_state))
             return {
+                "execution_plan": execution_plan,
+                "tool_trace": tool_trace,
                 "feasibility": fallback_feasibility,
                 "search_queries": search_queries,
                 "candidates": [],
@@ -241,81 +359,12 @@ class PlannerWorkflow:
                     ],
                 ),
                 "explanation": fallback_feasibility.reason,
-                "warnings": [
-                    "Google Places returned zero results for the generated queries."
-                ],
-                "metadata": PlanMetadata(
-                    search_queries=search_queries,
-                    candidate_count=0,
-                    shortlist_count=0,
-                    transport_preference=planning_state.transport_preference,
-                    primary_transport_mode=planning_state.transport_modes[0],
-                    evaluated_transport_modes=planning_state.transport_modes,
-                    workflow_engine=self.workflow_engine,
-                ),
+                "warnings": warnings,
+                "metadata": metadata,
+                "route_overview": route_overview,
             }
 
-        shortlist = self.optimizer.shortlist_candidates(planning_state, candidates)
-        evaluated_modes = self._resolve_transport_modes(planning_state.transport_preference)
-        route_maps_by_mode = await self.routes_client.compute_route_maps_for_modes(
-            places=shortlist,
-            modes=evaluated_modes,
-            language_code=planning_state.language_code,
-        )
-        route_map = self._select_route_map(
-            planning_state=planning_state,
-            route_maps_by_mode=route_maps_by_mode,
-        )
-        route_overview = await self._build_origin_destination_route_overview(
-            planning_state=planning_state,
-            origin=origin,
-            destination=destination,
-            evaluated_modes=evaluated_modes,
-        )
-        selected_modes = self._selected_modes(route_map)
-        primary_mode = selected_modes[0] if selected_modes else evaluated_modes[0]
-
-        itinerary = self.optimizer.build_itinerary(
-            planning_state=planning_state,
-            candidates=shortlist,
-            route_map=route_map,
-        )
-        budget = self.optimizer.estimate_budget(planning_state, itinerary)
-
-        itinerary_summary = [
-            {
-                "day_number": day.day_number,
-                "theme": day.theme,
-                "stops": [
-                    {
-                        "name": stop.place.name,
-                        "address": stop.place.address,
-                        "maps_uri": stop.place.google_maps_uri,
-                        "type": stop.place.primary_type,
-                        "rating": stop.place.rating,
-                        "travel_minutes": (
-                            stop.travel_from_previous.duration_minutes
-                            if stop.travel_from_previous
-                            else None
-                        ),
-                        "travel": (
-                            {
-                                "mode": stop.travel_from_previous.mode.value,
-                                "duration_minutes": stop.travel_from_previous.duration_minutes,
-                                "distance_meters": stop.travel_from_previous.distance_meters,
-                                "cost_estimate": stop.travel_from_previous.cost_estimate,
-                                "note": stop.travel_from_previous.note,
-                            }
-                            if stop.travel_from_previous
-                            else None
-                        ),
-                        "rationale": stop.rationale,
-                    }
-                    for stop in day.stops
-                ],
-            }
-            for day in itinerary
-        ]
+        itinerary_summary = self._build_itinerary_summary(itinerary)
         candidate_snapshot = [
             {
                 "name": place.name,
@@ -324,26 +373,30 @@ class PlannerWorkflow:
                 "rating": place.rating,
                 "maps_uri": place.google_maps_uri,
             }
-            for place in shortlist[:8]
+            for place in (shortlist or candidates)[:8]
         ]
-        explanation = await self.gemini_client.explain_itinerary(
-            raw_request=request.prompt,
-            planning_state=planning_state,
-            itinerary_summary=itinerary_summary,
-            route_overview=route_overview,
-            candidate_snapshot=candidate_snapshot,
-        )
-
-        warnings: list[str] = []
-        if not self.settings.gemini_api_key_value:
-            warnings.append("yo code trash not work")
-        if not self.settings.maps_api_key_value:
-            warnings.append(
-                "MAPS_API_KEY is not configured. Places and routing may fail or use fallback estimates."
+        if itinerary_summary or route_overview or candidate_snapshot:
+            explanation = await self.gemini_client.explain_itinerary(
+                raw_request=request.prompt,
+                planning_state=planning_state,
+                itinerary_summary=itinerary_summary,
+                route_overview=route_overview,
+                candidate_snapshot=candidate_snapshot,
             )
-        if planning_state.destination.value == "Unknown destination":
-            warnings.append("The destination could not be extracted reliably from the request.")
+        else:
+            explanation = await self.gemini_client.answer_without_tools(
+                raw_request=request.prompt,
+                planning_state=planning_state,
+                context_block=context_block,
+            )
 
+        warnings.extend(self._base_warnings(planning_state))
+        selected_modes = self._selected_modes(route_map)
+        primary_mode = (
+            selected_modes[0]
+            if selected_modes
+            else self._primary_mode_from_route_overview(route_overview, evaluated_modes[0])
+        )
         metadata = PlanMetadata(
             search_queries=search_queries,
             candidate_count=len(candidates),
@@ -354,8 +407,10 @@ class PlannerWorkflow:
             workflow_engine=self.workflow_engine,
         )
         return {
+            "execution_plan": execution_plan,
+            "tool_trace": tool_trace,
             "search_queries": search_queries,
-            "candidates": shortlist,
+            "candidates": shortlist or candidates,
             "itinerary": itinerary,
             "budget": budget,
             "explanation": explanation,
@@ -523,6 +578,78 @@ class PlannerWorkflow:
         )
         return {"response": response}
 
+    def _build_itinerary_summary(self, itinerary: list[Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "day_number": day.day_number,
+                "theme": day.theme,
+                "stops": [
+                    {
+                        "name": stop.place.name,
+                        "address": stop.place.address,
+                        "maps_uri": stop.place.google_maps_uri,
+                        "type": stop.place.primary_type,
+                        "rating": stop.place.rating,
+                        "travel_minutes": (
+                            stop.travel_from_previous.duration_minutes
+                            if stop.travel_from_previous
+                            else None
+                        ),
+                        "travel": (
+                            {
+                                "mode": stop.travel_from_previous.mode.value,
+                                "duration_minutes": stop.travel_from_previous.duration_minutes,
+                                "distance_meters": stop.travel_from_previous.distance_meters,
+                                "cost_estimate": stop.travel_from_previous.cost_estimate,
+                                "note": stop.travel_from_previous.note,
+                                "departure_stop": stop.travel_from_previous.departure_stop,
+                                "arrival_stop": stop.travel_from_previous.arrival_stop,
+                                "transit_line": stop.travel_from_previous.transit_line,
+                                "transit_headsign": stop.travel_from_previous.transit_headsign,
+                                "transit_stop_count": stop.travel_from_previous.transit_stop_count,
+                                "walk_to_station_minutes": stop.travel_from_previous.walk_to_station_minutes,
+                                "walk_from_station_minutes": stop.travel_from_previous.walk_from_station_minutes,
+                                "step_instructions": stop.travel_from_previous.step_instructions,
+                            }
+                            if stop.travel_from_previous
+                            else None
+                        ),
+                        "rationale": stop.rationale,
+                    }
+                    for stop in day.stops
+                ],
+            }
+            for day in itinerary
+        ]
+
+    def _base_warnings(self, planning_state: PlanningState) -> list[str]:
+        warnings: list[str] = []
+        if not self.settings.gemini_api_key_value:
+            warnings.append("yo code trash not work")
+        if not self.settings.maps_api_key_value:
+            warnings.append(
+                "MAPS_API_KEY is not configured. Places and routing may fail or use fallback estimates."
+            )
+        if planning_state.destination.value == "Unknown destination":
+            warnings.append("The destination could not be extracted reliably from the request.")
+        return warnings
+
+    def _primary_mode_from_route_overview(
+        self,
+        route_overview: dict[str, Any] | None,
+        fallback: TransportMode,
+    ) -> TransportMode:
+        if not route_overview:
+            return fallback
+        raw_mode = str(route_overview.get("mode", "")).strip().lower()
+        mapping = {
+            "drive": TransportMode.DRIVE,
+            "transit": TransportMode.TRANSIT,
+            "walk": TransportMode.WALK,
+            "bicycle": TransportMode.BICYCLE,
+        }
+        return mapping.get(raw_mode, fallback)
+
     async def _collect_candidates(
         self,
         *,
@@ -593,6 +720,14 @@ class PlannerWorkflow:
             "distance_meters": selected.distance_meters,
             "cost_estimate": selected.cost_estimate,
             "note": selected.note,
+            "departure_stop": selected.departure_stop,
+            "arrival_stop": selected.arrival_stop,
+            "transit_line": selected.transit_line,
+            "transit_headsign": selected.transit_headsign,
+            "transit_stop_count": selected.transit_stop_count,
+            "walk_to_station_minutes": selected.walk_to_station_minutes,
+            "walk_from_station_minutes": selected.walk_from_station_minutes,
+            "step_instructions": selected.step_instructions,
         }
 
     async def _resolve_location_point(
