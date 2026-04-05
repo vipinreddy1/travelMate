@@ -1,56 +1,46 @@
 # TravelMate Backend Architecture
 
-This document describes the **current** backend flow in code today, with emphasis on:
+This document describes the current backend behavior in code today, including:
 
-- where LLM calls happen
-- where data is transformed/processed
-- where exceptions are raised and handled
+- where LLM calls are made
+- where Maps/Routes calls are made
+- where data is transformed
+- where exceptions and fallbacks are handled
 
 ---
 
 ## 1. Runtime Topology
 
-At startup, FastAPI is created in [`app/main.py`](./app/main.py).
+FastAPI app bootstraps in [`app/main.py`](./app/main.py).
 
-`lifespan()` initializes shared app state:
+Shared state initialized in `lifespan()`:
 
-- `settings`: loaded from env via [`app/core/config.py`](./app/core/config.py)
-- `http_client`: a single shared `httpx.AsyncClient`
-- `memory_store`: process-local [`InMemorySessionStore`](./app/services/memory.py)
+- `settings` from [`app/core/config.py`](./app/core/config.py)
+- one shared `httpx.AsyncClient`
+- in-memory session store [`app/services/memory.py`](./app/services/memory.py)
 
-Routers:
+Registered routers:
 
-- health routes: [`app/api/routes/health.py`](./app/api/routes/health.py)
-- planner routes: [`app/api/routes/planner.py`](./app/api/routes/planner.py)
-
----
-
-## 2. High-Level Request Flow
-
-```text
-Client
-  -> FastAPI route
-    -> PlannerService
-      -> PlannerWorkflow (sequential)
-        -> Memory load
-        -> Gemini planning-state extraction
-        -> Gemini execution planning (decide which tools are needed)
-        -> Completeness evaluation
-        -> (if incomplete and attempts < threshold) specific follow-up questions
-        -> (if incomplete and attempts >= threshold) Gemini approximate itinerary
-        -> Feasibility evaluation
-        -> (if complete + feasible) action loop:
-           - direct answer only OR
-           - Places search (if needed)
-           - Routes compute (if needed)
-           - itinerary build (if needed)
-        -> Gemini final synthesis (grounded in whichever tool outputs were collected)
-        -> Response finalize + memory append
-```
+- [`app/api/routes/health.py`](./app/api/routes/health.py)
+- [`app/api/routes/planner.py`](./app/api/routes/planner.py)
+- [`app/api/routes/routes_direct.py`](./app/api/routes/routes_direct.py)
 
 ---
 
-## 3. API Surface
+## 2. API Surface
+
+### `GET /api/v1/health`
+
+File: [`app/api/routes/health.py`](./app/api/routes/health.py)
+
+Returns readiness and config signals:
+
+- `gemini_api_key_configured`
+- `maps_api_key_configured`
+- `google_calls_enabled`
+- `gemini_model`
+
+---
 
 ### `POST /api/v1/planner/test-simple-gemini`
 
@@ -58,20 +48,10 @@ File: [`app/api/routes/planner.py`](./app/api/routes/planner.py)
 
 Purpose:
 
-- extracts and returns a normalized `PlanningState` only
-- does **not** run completeness/feasibility/itinerary generation pipeline
-- utility/debug endpoint to test Gemini extraction in isolation
+- parse prompt into `PlanningState` only
+- no completeness/feasibility/tool execution
 
-Compatibility note:
-
-- deprecated alias still exists at `POST /api/v1/planner/planning-state` (hidden from schema)
-
-Execution path:
-
-1. Route dependency builds `PlannerService` with Gemini/Maps clients, optimizer, query builder, memory.
-2. `PlannerService.extract_planning_state()` calls Gemini parser.
-3. Service normalizes language/region/currency and transport preference/modes.
-4. Returns `PlanningStateResponse`.
+Legacy alias still exists (hidden): `POST /api/v1/planner/planning-state`
 
 ---
 
@@ -81,44 +61,73 @@ File: [`app/api/routes/planner.py`](./app/api/routes/planner.py)
 
 Purpose:
 
-- full orchestration endpoint with gating:
-  - first completeness
-  - then feasibility
-  - then place/routing/itinerary only when both pass
+- full gated workflow:
+  - planning-state extraction
+  - completeness
+  - feasibility
+  - conditional Places/Routes/itinerary execution
+  - final response synthesis
 
-Execution path:
+Response contract: `TripPlanResponse`
 
-1. `PlannerService.build_trip_plan()`
-2. `PlannerWorkflow.run()` in [`app/workflows/planner_graph.py`](./app/workflows/planner_graph.py)
-3. Workflow engine:
-   - uses internal sequential runner
-4. Final `TripPlanResponse` always produced through `_finalize_response()`
+---
 
-### Typical API Call Order (`/plan`)
+### `POST /api/v1/planner/test-transit-route`
 
-The planner no longer uses a rigid fixed order for tool calls. Instead:
+File: [`app/api/routes/planner.py`](./app/api/routes/planner.py)
 
-1. Client -> Backend: `POST /api/v1/planner/plan`
-2. Backend -> Gemini: `POST {gemini_base_url}/models/{gemini_model}:generateContent`
-Purpose: extract structured `PlanningState` from user prompt + session context.
-3. Backend -> Gemini: `POST {gemini_base_url}/models/{gemini_model}:generateContent`
-Purpose: produce an execution plan (`direct_answer` / `search_places` / `compute_routes` / `build_itinerary`).
-4. Backend -> Conditional tool calls based on plan:
-   - Places (if needed): `POST {places_base_url}/places:searchText`
-   - Routes (if needed): `POST {routes_base_url}/directions/v2:computeRoutes`
-5. Backend -> Gemini: `POST {gemini_base_url}/models/{gemini_model}:generateContent`
-Purpose: synthesize final response from available tool outputs.
-6. Backend -> Client: return `TripPlanResponse`.
+Purpose:
 
-Notes:
+- debug-oriented transit route endpoint using service wrappers
+- resolves `origin_query` and `destination_query` with Places
+- computes one route with Routes client and parsed transit details
 
-- Places and Routes are no longer mandatory; they are invoked only if the execution plan requires them.
-- If Places and Routes are skipped, the workflow returns a direct Gemini answer.
-- When invoked, fan-out behavior still applies:
-  - Places: one call per search query.
-  - Routes: one call per `(origin, destination, transport mode)` combination.
-- If completeness fails, tool-plan and tool calls are skipped.
-- If feasibility fails, steps 3-5 are skipped.
+Validation:
+
+- `departure_time` and `arrival_time` cannot both be set
+
+---
+
+### `POST /api/v1/routes-direct/compute`
+
+File: [`app/api/routes/routes_direct.py`](./app/api/routes/routes_direct.py)
+
+Purpose:
+
+- direct passthrough to Google Routes `directions/v2:computeRoutes`
+- bypasses planner, Gemini, optimizer, and memory
+- returns raw Google response JSON
+
+Input:
+
+- request body is forwarded as-is to Google Routes
+- optional query `fieldMask` maps to `X-Goog-FieldMask`
+
+This endpoint is intended for low-level API debugging and validation.
+
+---
+
+## 3. `/plan` Happy Path Call Order
+
+For a complete and feasible request:
+
+1. Client calls `POST /api/v1/planner/plan`
+2. Backend appends user turn to memory
+3. Backend calls Gemini `generateContent` to extract planning state
+4. Backend evaluates completeness (rule-based)
+5. Backend evaluates feasibility (rule-based)
+6. Backend calls Gemini `generateContent` to produce execution plan
+7. Backend conditionally calls:
+   - Places `places:searchText` (if `search_places` action)
+   - Routes `directions/v2:computeRoutes` (if `compute_routes` action)
+8. Backend builds shortlist, route map, itinerary, budget
+9. Backend calls Gemini `generateContent` for final user-facing explanation (or direct answer fallback path)
+10. Backend appends assistant turn to memory and returns `TripPlanResponse`
+
+Early exits:
+
+- incomplete request returns follow-up prompt (or approximate itinerary after threshold)
+- not feasible request returns feasibility message without itinerary
 
 ---
 
@@ -126,215 +135,173 @@ Notes:
 
 File: [`app/workflows/planner_graph.py`](./app/workflows/planner_graph.py)
 
-### Step A: `_load_memory`
+Main stages:
 
-- appends the current user prompt to session memory (`ConversationRole.USER`)
-- if `session_id` missing, workflow creates one (`uuid4`)
-
-### Step B: `_extract_planning_state`  **(LLM call #1)**
-
-- builds context block from recent turns (excluding newest user turn)
-- merges context + latest request into one prompt for extraction
-- calls `GeminiClient.extract_planning_state(...)`
-- writes normalized transport preference and transport modes
-- stores planning state in memory
-
-### Step C: `_build execution plan` **(LLM call #2)**
-
-- calls `GeminiClient.plan_execution(...)`
-- returns action order and tool usage decisions, for example:
-  - `direct_answer`
-  - `search_places`
-  - `compute_routes`
-  - `build_itinerary`
-- this makes tool calls conditional on query intent
-
-### Step D: `_evaluate_completeness`
-
-- calls rule-based `CompletenessEvaluator.evaluate(...)`
-- determines `complete` vs `incomplete`
-- produces specific follow-up prompts for each missing field when needed
-- tracks per-session incomplete attempts in memory
-- uses prior session context so follow-up turns can omit destination/origin if they were already provided earlier
-- missing-detail priority order is fixed as:
-  - `destination` -> `origin`
-
-### Step E: `_evaluate_feasibility`
-
-- only reached if completeness is `complete`
-- calls rule-based `FeasibilityEvaluator.evaluate(...)`
-- determines `feasible` vs `not_feasible`
-
-### Step F: `_build_plan` (only if complete + feasible)
-
-Data processing stages:
-
-1. Execution-plan action loop:
-   - runs actions from `GeminiClient.plan_execution(...)`, bounded by `PLANNER_AGENT_MAX_STEPS`
-2. Query generation (if `search_places` is selected):
-   - `SearchQueryBuilder.build_queries(planning_state, origin, destination)`
-   - includes route-aware queries for "along the way / on the way / en route" prompts
-3. Candidate collection:
-   - `_collect_candidates()` -> `PlacesClient.search_text(...)` per query
-   - dedupe by `place_id`
-4. Candidate scoring + shortlist:
-   - `ItineraryOptimizer.shortlist_candidates(...)`
-   - applies exclusion constraints (for example "exclude X")
-5. Route evaluation by transport mode (if `compute_routes` is selected):
-   - `RoutesClient.compute_route_maps_for_modes(...)`
-   - evaluates all requested/effective modes
-   - computes an origin->destination route overview when both endpoints can be resolved
-6. Route option selection:
-   - `_select_route_map()` + `_choose_route_option()`
-   - selection strategy depends on `transport_preference`
-7. Itinerary build (if `build_itinerary` is selected):
-   - `ItineraryOptimizer.build_itinerary(...)`
-8. Budget estimate:
-   - `ItineraryOptimizer.estimate_budget(...)`
-9. Explanation generation **(LLM call #3 for full path)**:
-   - `GeminiClient.explain_itinerary(...)`
-   - final prompt includes:
-     - route overview from Routes API
-     - place data from Places API
-     - structured itinerary summary with travel legs
-   - asks Gemini to return sections:
-     - `How To Get There`
-     - `Places Along The Way`
-     - `Suggested Itinerary`
-     - `Notes And Tradeoffs`
-
-Special branch:
-
-- if zero Places candidates found, workflow marks request as `not_feasible` and returns guidance question without itinerary.
-
-### Step G: `_finalize_response`
-
-- central response builder for all outcomes:
-  - incomplete
-  - not feasible
-  - successful itinerary
-- when incomplete attempts reach `PLANNER_MAX_INCOMPLETE_ATTEMPTS` (default `3`), it calls Gemini to return an approximate itinerary draft instead of only another follow-up prompt
-- appends assistant message to memory
-- attaches recent context and metadata (turn count, transport summary, engine used)
+- `_load_memory`
+  - append latest user message
+- `_extract_planning_state` (LLM call)
+  - merge context + latest prompt
+  - normalize transport preference/modes
+- `_evaluate_completeness` (rule-based)
+  - track incomplete attempts per session
+- `_evaluate_feasibility` (rule-based)
+- `_build_plan`
+  - execution plan (LLM call)
+  - action loop (`direct_answer`, `search_places`, `compute_routes`, `build_itinerary`)
+  - candidate dedupe + shortlist
+  - route computation for selected modes
+  - route selection based on transport preference
+  - itinerary + budget generation
+  - explanation generation (LLM call) or direct-answer path
+- `_finalize_response`
+  - unify response shape for all branches
+  - write assistant turn
+  - include recent context and metadata
 
 ---
 
-## 5. LLM Call Locations and Behavior
+## 5. LLM Calls and Responsibilities
 
 File: [`app/clients/gemini.py`](./app/clients/gemini.py)
 
 ### `extract_planning_state(...)`
 
-- endpoint called: `POST {gemini_base_url}/models/{gemini_model}:generateContent`
-- prompt style: strict JSON schema extraction
-- output normalized before Pydantic validation:
-  - constraint strengths (e.g., `must` -> `hard`)
-  - preference weights (e.g., `high` -> `0.9`)
-  - transport preference synonyms
+- Gemini `generateContent` call
+- outputs structured planning JSON
+- local normalization before Pydantic validation:
+  - constraint strength aliases
+  - soft-preference weight aliases
+  - transport preference aliases
 
-If Gemini is disabled or missing key:
+Fallback if Gemini disabled/missing key:
 
-- uses local heuristic parser (`_heuristic_planning_state`)
+- `_heuristic_planning_state`
 
 ### `plan_execution(...)`
 
-- endpoint called: `POST {gemini_base_url}/models/{gemini_model}:generateContent`
-- creates a tool-usage plan that decides whether to:
-  - answer directly
-  - call Places
-  - call Routes
-  - build itinerary
-- supports ordered action execution and focus hints
+- Gemini `generateContent` call
+- outputs tool selection plan:
+  - `direct_answer_only`
+  - `use_places`
+  - `use_routes`
+  - `build_itinerary`
+  - `action_order`
+  - `search_focus`
+  - `route_request` transit options
 
-If Gemini is disabled or missing key:
+Normalization includes:
 
-- uses local heuristic execution planning (`_heuristic_execution_plan`)
+- action filtering
+- `route_request` sanitization:
+  - RFC3339 timestamp checks
+  - transit mode enum normalization (`BUS`, `SUBWAY`, `TRAIN`, `LIGHT_RAIL`, `RAIL`)
+  - transit routing preference normalization (`LESS_WALKING`, `FEWER_TRANSFERS`)
+  - conflict resolution when both departure/arrival times are set
+
+Fallback if Gemini disabled/missing key:
+
+- `_heuristic_execution_plan`
 
 ### `explain_itinerary(...)`
 
-- endpoint called: same Gemini `generateContent`
-- prompt includes:
-  - raw user request
-  - full planning state JSON
-  - itinerary summary
-- used only for natural-language explanation after itinerary exists
-
-If Gemini is disabled or missing key:
-
-- uses local explanation fallback (`_fallback_explanation`)
+- Gemini `generateContent` call
+- final natural-language rendering from structured data
+- prompt instructs model to prioritize route/step details and avoid hallucination
 
 ### `answer_without_tools(...)`
 
-- endpoint called: same Gemini `generateContent`
-- used when execution plan selects `direct_answer` and no map calls are needed
+- Gemini `generateContent` call for direct answer path
+
+### `approximate_itinerary_from_incomplete(...)`
+
+- Gemini `generateContent` call used only after repeated incomplete attempts
 
 ---
 
-## 6. Google Maps/Places/Routes Call Locations
+## 6. Maps and Routes Processing
 
 File: [`app/clients/maps.py`](./app/clients/maps.py)
 
-### Places
+### Places client
 
 - `PlacesClient.search_text(...)`
-- endpoint: `POST {places_base_url}/places:searchText`
-- field-mask constrained payload; converts results to `CandidatePlace`
+- calls `POST {places_base_url}/places:searchText`
+- maps response into `CandidatePlace` models
 
-### Routes
+### Routes client
 
 - `RoutesClient.compute_route(...)`
-- endpoint: `POST {routes_base_url}/directions/v2:computeRoutes`
-- called pairwise for each shortlisted origin/destination and mode
-- supports `DRIVE`, `TRANSIT`, `WALK`, `BICYCLE` mode mapping
-- for transit routes, the client now extracts step-level commute details when available:
-  - departure/arrival station
-  - line name and headsign
-  - stop count
-  - walk-to-station and walk-from-station minutes
-  - step-by-step instructions
+- calls `POST {routes_base_url}/directions/v2:computeRoutes`
+- supports `WALK`, `TRANSIT`, `DRIVE`, `BICYCLE`
+- supports transit request controls:
+  - `departureTime`
+  - `arrivalTime`
+  - `computeAlternativeRoutes`
+  - `transitPreferences.allowedTravelModes`
+  - `transitPreferences.routingPreference`
 
-If routes are unavailable (or Google calls disabled):
+Extracted transit details include:
 
-- local heuristic route fallback via haversine + speed assumptions
+- station names, line, headsign, stop count
+- step instructions
+- walk-to/from-station minutes
+- departure/arrival times and localized display times
+- headway and trip short text
+- line metadata (agency names, URI, line colors)
+- transit fare and currency when available
+
+Fallback behavior:
+
+- if Google calls disabled/missing API key, or no routes returned, use heuristic route estimate
+- heuristic route includes explicit note:
+  - `"Estimated locally because Google routing was unavailable."`
 
 ---
 
-## 7. Data Processing Responsibilities (by module)
+## 7. Data Processing Ownership
 
-- extraction/parsing: [`app/clients/gemini.py`](./app/clients/gemini.py)
-- completeness rules: [`app/services/completeness.py`](./app/services/completeness.py)
-- feasibility rules: [`app/services/feasibility.py`](./app/services/feasibility.py)
-- query construction: [`app/services/query_builder.py`](./app/services/query_builder.py)
-- ranking/shortlisting/itinerary/budget: [`app/services/optimizer.py`](./app/services/optimizer.py)
-- memory/session context: [`app/services/memory.py`](./app/services/memory.py)
-- contract schemas: [`app/models/planning.py`](./app/models/planning.py)
+- API schemas: [`app/models/planning.py`](./app/models/planning.py)
+- Orchestration: [`app/workflows/planner_graph.py`](./app/workflows/planner_graph.py)
+- Planner façade: [`app/services/planner.py`](./app/services/planner.py)
+- Completeness rules: [`app/services/completeness.py`](./app/services/completeness.py)
+- Feasibility rules: [`app/services/feasibility.py`](./app/services/feasibility.py)
+- Query generation: [`app/services/query_builder.py`](./app/services/query_builder.py)
+- Ranking/itinerary/budget: [`app/services/optimizer.py`](./app/services/optimizer.py)
+- Session memory: [`app/services/memory.py`](./app/services/memory.py)
+- Google API transport/errors: [`app/clients/base.py`](./app/clients/base.py)
 
 ---
 
-## 8. Exception and Error Handling
+## 8. Exception and Fallback Handling
 
-### Outbound Google API errors
+### Client/base layer
 
-Source: [`app/clients/base.py`](./app/clients/base.py)
+File: [`app/clients/base.py`](./app/clients/base.py)
 
-- `post_json(...)` catches `httpx.HTTPError` and raises `GoogleAPIError`
-- non-2xx HTTP responses are converted to `GoogleAPIError`
-- missing API keys also raise `GoogleAPIError` via `require_*_api_key()`
+- network errors -> `GoogleAPIError`
+- non-2xx Google responses -> `GoogleAPIError`
+- missing keys via `require_gemini_api_key()` / `require_maps_api_key()` -> `GoogleAPIError`
 
-### Route-level handling
+### Planner routes
 
 File: [`app/api/routes/planner.py`](./app/api/routes/planner.py)
 
-- `GoogleAPIError` -> HTTP `502 Bad Gateway`
-- `ValueError` in `/plan` -> HTTP `400 Bad Request`
-- `ValueError` in `/test-simple-gemini` is **not** explicitly mapped here (would surface as default server error unless handled upstream)
+- `GoogleAPIError` -> HTTP 502
+- `ValueError` -> HTTP 400 (for `/plan` and `/test-transit-route`)
 
-### Internal fallback behavior (not exceptions)
+### Direct routes endpoint
 
-- missing Gemini key or disabled Google calls:
-  - planning extraction/explanation use local heuristics/fallback text
-- missing Maps key during route computation:
-  - heuristic route estimates are used in `RoutesClient.compute_route(...)`
+File: [`app/api/routes/routes_direct.py`](./app/api/routes/routes_direct.py)
+
+- `GoogleAPIError` -> HTTP 502
+- raw payload is passed through (schema-free for flexibility)
+
+### Non-exception fallbacks
+
+- Gemini disabled or key missing:
+  - heuristic planning/execution/explanation paths
+- Maps disabled or key missing:
+  - heuristic route estimates
 
 ---
 
@@ -342,71 +309,53 @@ File: [`app/api/routes/planner.py`](./app/api/routes/planner.py)
 
 File: [`app/services/memory.py`](./app/services/memory.py)
 
-Current behavior:
+Current implementation:
 
-- memory is in-process only (`dict` in Python process)
-- not persistent across server restarts
+- in-process dictionary storage only
 - keyed by `session_id`
-- stores:
-  - conversation turns (user/assistant)
-  - last planning state
+- stores user/assistant turns and last planning state
+- resets on process restart
 
-Usage in workflow:
+Used for:
 
-- prior turns are injected into the planning-state LLM extraction prompt
-- recent context is returned in API response
-
----
-
-## 10. Transport Strategy in Current Architecture
-
-Transport is controlled by `transport_preference` in `TravelPlanningRequest`.
-
-Mapping occurs in:
-
-- [`app/services/planner.py`](./app/services/planner.py)
-- [`app/workflows/planner_graph.py`](./app/workflows/planner_graph.py)
-
-Behavior:
-
-- `own_transport` -> evaluate `drive`
-- `public_transport` -> evaluate `transit`
-- `hybrid` -> evaluate both and choose per leg by hybrid score
-- `optimize_for_time` (default) -> evaluate both and choose fastest-first per leg
-- `optimize_for_money` -> evaluate both and choose lowest estimated cost per leg
-
-So route options are processed internally and the selected leg-level results are returned to the user as part of each stop's `travel_from_previous`.
+- context injection into planning-state extraction
+- turn-count and recent context in responses
+- incomplete-attempt tracking
 
 ---
 
-## 11. Configuration and External Dependencies
+## 10. Transport Strategy
 
-Settings source: [`app/core/config.py`](./app/core/config.py)
+Transport preference from request maps to evaluated modes:
 
-Key runtime flags:
+- `own_transport` -> `drive`
+- `public_transport` -> `transit`
+- `hybrid` -> `drive + transit` (hybrid score)
+- `optimize_for_time` -> `drive + transit` (min duration)
+- `optimize_for_money` -> `transit + drive` (min cost)
 
-- `GEMINI_API_KEY`
-- `MAPS_API_KEY`
-- `PLANNER_ENABLE_GOOGLE_CALLS`
-- `PLANNER_AGENT_MAX_STEPS`
-- `GEMINI_MODEL`
-- defaults for language/region/currency
+Leg-level route selection is performed in workflow route-map selection.
 
-Health endpoint exposes effective readiness signals:
+---
 
-- [`GET /api/v1/health`](./app/api/routes/health.py)
+## 11. Current Limitation to Be Aware Of
+
+`GeminiClient.plan_execution(...)` now returns a normalized `route_request` object with transit-specific options, but the current `PlannerWorkflow._build_plan(...)` does not yet pass that `route_request` into its internal `compute_route(...)` calls.
+
+Impact:
+
+- planner endpoint uses default internal route-compute settings
+- transit preference tuning from execution-plan output is fully available today in:
+  - `POST /api/v1/planner/test-transit-route`
+  - `POST /api/v1/routes-direct/compute`
 
 ---
 
 ## 12. Practical Summary
 
-Current architecture is a gated planning pipeline:
+There are now two clear operating modes:
 
-1. Parse user request into structured planning state (LLM or heuristic fallback).
-2. Check completeness.
-3. Check feasibility.
-4. Only then call Places/Routes and optimize itinerary.
-5. Generate explanation (LLM or fallback).
-6. Return structured response + conversational context.
+- planner mode (`/api/v1/planner/plan`): conversational, gated, optimized, memory-aware
+- direct mode (`/api/v1/routes-direct/compute`): raw Google Routes debugging, no orchestration
 
-The key control points are in `PlannerWorkflow`, and all Google-network errors are normalized through `GoogleAPIError` before route-level HTTP mapping.
+All Google transport failures are normalized through `GoogleAPIError`, and route fallback behavior is explicit in the returned route notes.

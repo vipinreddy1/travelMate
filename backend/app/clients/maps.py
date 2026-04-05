@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+from datetime import UTC, datetime
 from typing import Iterable
 
 from app.clients.base import BaseGoogleClient, GoogleAPIError
@@ -151,6 +152,11 @@ class RoutesClient(BaseGoogleClient):
         destination: CandidatePlace,
         mode: TransportMode,
         language_code: str,
+        departure_time: datetime | None = None,
+        arrival_time: datetime | None = None,
+        compute_alternative_routes: bool = False,
+        transit_allowed_travel_modes: list[str] | None = None,
+        transit_routing_preference: str | None = None,
     ) -> TravelStep:
         if not self.settings.planner_enable_google_calls or not self.settings.maps_api_key_value:
             return self._heuristic_route(origin, destination, mode)
@@ -161,6 +167,20 @@ class RoutesClient(BaseGoogleClient):
             "travelMode": self._route_mode(mode),
             "languageCode": language_code,
         }
+        if departure_time is not None:
+            payload["departureTime"] = self._to_rfc3339(departure_time)
+        if arrival_time is not None:
+            payload["arrivalTime"] = self._to_rfc3339(arrival_time)
+        if compute_alternative_routes:
+            payload["computeAlternativeRoutes"] = True
+        if mode == TransportMode.TRANSIT:
+            transit_preferences: dict[str, object] = {}
+            if transit_allowed_travel_modes:
+                transit_preferences["allowedTravelModes"] = transit_allowed_travel_modes
+            if transit_routing_preference:
+                transit_preferences["routingPreference"] = transit_routing_preference
+            if transit_preferences:
+                payload["transitPreferences"] = transit_preferences
         headers = {
             "X-Goog-Api-Key": self.require_maps_api_key(),
             "X-Goog-FieldMask": ",".join(
@@ -194,6 +214,7 @@ class RoutesClient(BaseGoogleClient):
         if advisory.get("tollInfo"):
             note = "Route may include tolls."
         transit_details = self._extract_transit_details(route)
+        fare_amount, fare_currency = self._extract_transit_fare(advisory)
         walk_to_station_minutes, walk_from_station_minutes = self._extract_station_walk_minutes(route)
         step_instructions = self._extract_step_instructions(route, mode)
         cost_estimate = self._estimate_cost(
@@ -213,6 +234,18 @@ class RoutesClient(BaseGoogleClient):
             transit_headsign=transit_details.get("transit_headsign"),
             transit_stop_count=transit_details.get("transit_stop_count"),
             vehicle_type=transit_details.get("vehicle_type"),
+            departure_time=transit_details.get("departure_time"),
+            arrival_time=transit_details.get("arrival_time"),
+            localized_departure_time=transit_details.get("localized_departure_time"),
+            localized_arrival_time=transit_details.get("localized_arrival_time"),
+            headway_minutes=transit_details.get("headway_minutes"),
+            trip_short_text=transit_details.get("trip_short_text"),
+            transit_agency_names=transit_details.get("transit_agency_names", []),
+            transit_line_uri=transit_details.get("transit_line_uri"),
+            transit_line_color=transit_details.get("transit_line_color"),
+            transit_line_text_color=transit_details.get("transit_line_text_color"),
+            transit_fare=fare_amount,
+            transit_fare_currency=fare_currency,
             walk_to_station_minutes=walk_to_station_minutes,
             walk_from_station_minutes=walk_from_station_minutes,
             step_instructions=step_instructions,
@@ -243,6 +276,11 @@ class RoutesClient(BaseGoogleClient):
             return int(float(cleaned))
         except ValueError:
             return 0
+
+    def _to_rfc3339(self, value: datetime) -> str:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.isoformat().replace("+00:00", "Z")
 
     def _heuristic_route(
         self,
@@ -314,6 +352,7 @@ class RoutesClient(BaseGoogleClient):
                     continue
 
                 stop_details = transit_details.get("stopDetails") or {}
+                localized_values = transit_details.get("localizedValues") or {}
                 departure_stop = (
                     (stop_details.get("departureStop") or {}).get("name")
                     or (transit_details.get("departureStop") or {}).get("name")
@@ -323,6 +362,8 @@ class RoutesClient(BaseGoogleClient):
                     or (transit_details.get("arrivalStop") or {}).get("name")
                 )
                 transit_line = self._extract_transit_line_name(transit_details)
+                line = transit_details.get("transitLine") or transit_details.get("transit_line") or {}
+                agencies = line.get("agencies") or []
                 return {
                     "departure_stop": departure_stop,
                     "arrival_stop": arrival_stop,
@@ -330,6 +371,27 @@ class RoutesClient(BaseGoogleClient):
                     "transit_headsign": transit_details.get("headsign"),
                     "transit_stop_count": transit_details.get("stopCount"),
                     "vehicle_type": self._extract_vehicle_type(transit_details),
+                    "departure_time": stop_details.get("departureTime")
+                    or transit_details.get("departureTime"),
+                    "arrival_time": stop_details.get("arrivalTime")
+                    or transit_details.get("arrivalTime"),
+                    "localized_departure_time": (
+                        ((localized_values.get("departureTime") or {}).get("time") or {}).get("text")
+                    ),
+                    "localized_arrival_time": (
+                        ((localized_values.get("arrivalTime") or {}).get("time") or {}).get("text")
+                    ),
+                    "headway_minutes": self._duration_to_minutes(transit_details.get("headway")),
+                    "trip_short_text": transit_details.get("tripShortText")
+                    or transit_details.get("trip_short_text"),
+                    "transit_agency_names": [
+                        agency.get("name")
+                        for agency in agencies
+                        if isinstance(agency, dict) and agency.get("name")
+                    ],
+                    "transit_line_uri": line.get("uri"),
+                    "transit_line_color": line.get("color"),
+                    "transit_line_text_color": line.get("textColor") or line.get("text_color"),
                 }
 
         return {
@@ -339,7 +401,38 @@ class RoutesClient(BaseGoogleClient):
             "transit_headsign": None,
             "transit_stop_count": None,
             "vehicle_type": None,
+            "departure_time": None,
+            "arrival_time": None,
+            "localized_departure_time": None,
+            "localized_arrival_time": None,
+            "headway_minutes": None,
+            "trip_short_text": None,
+            "transit_agency_names": [],
+            "transit_line_uri": None,
+            "transit_line_color": None,
+            "transit_line_text_color": None,
         }
+
+    def _extract_transit_fare(
+        self,
+        advisory: dict[str, object],
+    ) -> tuple[float | None, str | None]:
+        transit_fare = advisory.get("transitFare") or {}
+        if not isinstance(transit_fare, dict):
+            return (None, None)
+        currency = transit_fare.get("currencyCode")
+        amount = self._money_to_float(transit_fare)
+        return (amount, currency if isinstance(currency, str) else None)
+
+    def _money_to_float(self, money: dict[str, object]) -> float | None:
+        units_raw = money.get("units")
+        nanos_raw = money.get("nanos", 0)
+        try:
+            units = int(units_raw) if units_raw is not None else 0
+            nanos = int(nanos_raw)
+        except (TypeError, ValueError):
+            return None
+        return round(units + nanos / 1_000_000_000, 2)
 
     def _extract_transit_line_name(self, transit_details: dict[str, object]) -> str | None:
         line = transit_details.get("transitLine") or transit_details.get("transit_line") or {}
@@ -379,17 +472,21 @@ class RoutesClient(BaseGoogleClient):
         walk_before = 0
         for step in steps[:first_transit_index]:
             if str(step.get("travelMode") or "").upper() == "WALK":
-                walk_before += self._duration_to_minutes(
+                walk_minutes = self._duration_to_minutes(
                     step.get("staticDuration") or step.get("duration")
                 )
+                if walk_minutes is not None:
+                    walk_before += walk_minutes
 
         walk_after = 0
         if last_transit_index is not None:
             for step in steps[last_transit_index + 1 :]:
                 if str(step.get("travelMode") or "").upper() == "WALK":
-                    walk_after += self._duration_to_minutes(
+                    walk_minutes = self._duration_to_minutes(
                         step.get("staticDuration") or step.get("duration")
                     )
+                    if walk_minutes is not None:
+                        walk_after += walk_minutes
 
         return (
             walk_before if walk_before > 0 else None,

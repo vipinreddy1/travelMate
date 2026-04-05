@@ -10,6 +10,10 @@ A clean FastAPI scaffold for a travel planner that uses:
 
 - `POST /api/v1/planner/test-simple-gemini`
   - Converts natural-language travel requests into a flexible planning state
+- `POST /api/v1/planner/test-transit-route`
+  - Resolves origin/destination via Places and returns detailed route leg data from Routes
+- `POST /api/v1/routes-direct/compute`
+  - Raw passthrough to Google Routes `computeRoutes` (no planner orchestration)
 - `POST /api/v1/planner/plan`
   - Completeness + feasibility gated planning with memory, then an execution-plan loop that conditionally calls Gemini/Places/Routes
 - `GET /api/v1/health`
@@ -100,6 +104,52 @@ uvicorn app.main:app --reload
   "currency_code": "USD",
   "transport_preference": "optimize_for_time",
   "session_id": "user-42-trip-thread"
+}
+```
+
+## Transit debug request
+
+Use this endpoint to inspect raw transit/car route details (station names, line, headsign, step instructions, walk-to-station time).
+
+`POST /api/v1/planner/test-transit-route`
+
+```json
+{
+  "origin_query": "Shinjuku Station, Tokyo",
+  "destination_query": "Asakusa Station, Tokyo",
+  "language_code": "en",
+  "region_code": "JP",
+  "transport_mode": "transit",
+  "departure_time": "2026-04-06T09:00:00+09:00",
+  "arrival_time": null,
+  "compute_alternative_routes": true,
+  "transit_allowed_travel_modes": ["SUBWAY", "TRAIN"],
+  "transit_routing_preference": "LESS_WALKING"
+}
+```
+
+## Direct Routes API call (bypass planner)
+
+Send a raw Google Routes `computeRoutes` request body directly to:
+
+`POST /api/v1/routes-direct/compute?fieldMask=routes.duration,routes.distanceMeters,routes.legs.steps.transitDetails,routes.legs.steps.navigationInstruction.instructions,routes.travelAdvisory.transitFare`
+
+```json
+{
+  "origin": {
+    "address": "Shinjuku Station, Tokyo"
+  },
+  "destination": {
+    "address": "Asakusa Station, Tokyo"
+  },
+  "travelMode": "TRANSIT",
+  "departureTime": "2026-04-06T09:00:00+09:00",
+  "computeAlternativeRoutes": true,
+  "transitPreferences": {
+    "allowedTravelModes": ["SUBWAY", "TRAIN"],
+    "routingPreference": "LESS_WALKING"
+  },
+  "languageCode": "en"
 }
 ```
 

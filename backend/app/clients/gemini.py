@@ -50,6 +50,11 @@ Rules:
 - If user asks for "along the way / on the way / route" guidance, routes_compute is usually needed.
 - If user asks for recommendations (food/places/attractions), places_search is usually needed, you can call route_compute if user asks for place near a location or along a route.
 - itinerary_builder should be requested only when a day-by-day or stop-by-stop itinerary is needed.
+- For transit-heavy requests, prepare route_request fields aligned with Google Routes transit docs:
+  - compute_alternative_routes (boolean)
+  - departure_time OR arrival_time (RFC3339, only one should be set)
+  - transit_allowed_travel_modes: subset of BUS, SUBWAY, TRAIN, LIGHT_RAIL, RAIL
+  - transit_routing_preference: LESS_WALKING or FEWER_TRANSFERS
 - Return JSON only.
 """.strip()
 
@@ -181,6 +186,12 @@ Return a JSON object with keys:
 - use_routes: boolean
 - build_itinerary: boolean
 - search_focus: array of strings
+- route_request: object with keys:
+  - compute_alternative_routes: boolean
+  - departure_time: RFC3339 string|null
+  - arrival_time: RFC3339 string|null
+  - transit_allowed_travel_modes: array of "BUS"|"SUBWAY"|"TRAIN"|"LIGHT_RAIL"|"RAIL"
+  - transit_routing_preference: "LESS_WALKING"|"FEWER_TRANSFERS"|null
 - action_order: array containing only:
   - "direct_answer"
   - "search_places"
@@ -192,6 +203,7 @@ Constraints:
 - If direct_answer_only is true, action_order should be ["direct_answer"].
 - If use_routes is true for route-oriented requests, include "compute_routes".
 - If user asks for recommendations, include "search_places".
+- In route_request, do not set both departure_time and arrival_time at the same time.
 """.strip()
 
         url = (
@@ -261,13 +273,16 @@ Requirements:
   4) Notes And Tradeoffs
 - "How To Get There" must use route_overview if present:
   - include mode, duration, and commute detail
-  - for transit include line, departure/arrival station, headsign, stop count, and any walk-to/from-station minutes when available
+  - for transit include: line, departure/arrival station, headsign, stop count, and walk-to/from-station minutes when available
+  - when present, include transit details aligned to Google Routes fields:
+    departure_time, arrival_time, localized_departure_time, localized_arrival_time,
+    trip_short_text, headway_minutes, transit_agency_names, transit_fare + transit_fare_currency
   - for driving include a concise driving commute summary
   - when route details are unavailable, provide a best-effort generic commute suggestion and clearly say it is estimated
 - "Places Along The Way" must list specific place names from itinerary/candidate data; include brief why-visit.
   If no place data is available, explicitly state that places data is unavailable.
 - "Suggested Itinerary" must be step-by-step and include transport transitions between stops.
-- If step_instructions are provided in itinerary_summary/route_overview, use them verbatim or lightly rephrase.
+- If step_instructions are provided in itinerary_summary/route_overview, use them as the primary transport steps.
 - Mention at least one concrete food stop when user intent includes food keywords.
 - Respect any exclusion constraints from planning_state.hard_constraints.
 - Do not invent facts, routes, venues, or prices outside the provided data.
@@ -513,6 +528,31 @@ Requirements:
             ],
             "reasoning": str(payload.get("reasoning", "")).strip(),
         }
+        route_request = payload.get("route_request") or {}
+        if not isinstance(route_request, dict):
+            route_request = {}
+        normalized_route_request = {
+            "compute_alternative_routes": bool(
+                route_request.get("compute_alternative_routes", False)
+            ),
+            "departure_time": self._normalize_rfc3339_or_none(
+                route_request.get("departure_time")
+            ),
+            "arrival_time": self._normalize_rfc3339_or_none(
+                route_request.get("arrival_time")
+            ),
+            "transit_allowed_travel_modes": self._normalize_transit_travel_modes(
+                route_request.get("transit_allowed_travel_modes")
+            ),
+            "transit_routing_preference": self._normalize_transit_routing_preference(
+                route_request.get("transit_routing_preference")
+            ),
+        }
+        if (
+            normalized_route_request["departure_time"] is not None
+            and normalized_route_request["arrival_time"] is not None
+        ):
+            normalized_route_request["arrival_time"] = None
 
         requested_order = payload.get("action_order") or []
         valid_actions = {
@@ -532,6 +572,13 @@ Requirements:
             normalized["use_routes"] = False
             normalized["build_itinerary"] = False
             normalized["action_order"] = ["direct_answer"]
+            normalized["route_request"] = {
+                "compute_alternative_routes": False,
+                "departure_time": None,
+                "arrival_time": None,
+                "transit_allowed_travel_modes": [],
+                "transit_routing_preference": None,
+            }
             return normalized
 
         if not action_order:
@@ -552,6 +599,7 @@ Requirements:
             return heuristic
 
         normalized["action_order"] = action_order
+        normalized["route_request"] = normalized_route_request
         return normalized
 
     def _heuristic_execution_plan(
@@ -638,6 +686,29 @@ Requirements:
         if not actions:
             actions = ["direct_answer"]
 
+        transit_allowed_modes: list[str] = []
+        if "bus" in request:
+            transit_allowed_modes.append("BUS")
+        if "subway" in request or "metro" in request:
+            transit_allowed_modes.append("SUBWAY")
+        if "train" in request:
+            transit_allowed_modes.append("TRAIN")
+        if "light rail" in request or "tram" in request:
+            transit_allowed_modes.append("LIGHT_RAIL")
+        if not transit_allowed_modes and ("rail" in request):
+            transit_allowed_modes.append("RAIL")
+
+        transit_routing_preference = None
+        if "less walking" in request:
+            transit_routing_preference = "LESS_WALKING"
+        elif "fewer transfers" in request or "less transfers" in request:
+            transit_routing_preference = "FEWER_TRANSFERS"
+
+        compute_alternative_routes = any(
+            marker in request
+            for marker in ("alternative", "alternatives", "options", "multiple routes")
+        )
+
         return {
             "direct_answer_only": actions == ["direct_answer"],
             "use_places": use_places,
@@ -645,8 +716,72 @@ Requirements:
             "build_itinerary": build_itinerary,
             "search_focus": search_focus,
             "action_order": actions,
+            "route_request": {
+                "compute_alternative_routes": compute_alternative_routes,
+                "departure_time": None,
+                "arrival_time": None,
+                "transit_allowed_travel_modes": transit_allowed_modes,
+                "transit_routing_preference": transit_routing_preference,
+            },
             "reasoning": "Heuristic execution plan used.",
         }
+
+    def _normalize_rfc3339_or_none(self, raw_value: Any) -> str | None:
+        if not isinstance(raw_value, str):
+            return None
+        value = raw_value.strip()
+        if not value:
+            return None
+        rfc3339_pattern = (
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+            r"(?:\.\d{1,9})?(?:Z|[+\-]\d{2}:\d{2})$"
+        )
+        if not re.match(rfc3339_pattern, value):
+            return None
+        return value
+
+    def _normalize_transit_travel_modes(self, raw_modes: Any) -> list[str]:
+        if not isinstance(raw_modes, list):
+            return []
+        normalized: list[str] = []
+        mapping = {
+            "bus": "BUS",
+            "subway": "SUBWAY",
+            "metro": "SUBWAY",
+            "train": "TRAIN",
+            "light_rail": "LIGHT_RAIL",
+            "light rail": "LIGHT_RAIL",
+            "tram": "LIGHT_RAIL",
+            "rail": "RAIL",
+            "BUS": "BUS",
+            "SUBWAY": "SUBWAY",
+            "TRAIN": "TRAIN",
+            "LIGHT_RAIL": "LIGHT_RAIL",
+            "RAIL": "RAIL",
+        }
+        for item in raw_modes:
+            key = str(item).strip()
+            if not key:
+                continue
+            mapped = mapping.get(key, mapping.get(key.lower()))
+            if mapped and mapped not in normalized:
+                normalized.append(mapped)
+        return normalized
+
+    def _normalize_transit_routing_preference(self, raw_value: Any) -> str | None:
+        if not isinstance(raw_value, str):
+            return None
+        key = raw_value.strip()
+        mapping = {
+            "LESS_WALKING": "LESS_WALKING",
+            "FEWER_TRANSFERS": "FEWER_TRANSFERS",
+            "less_walking": "LESS_WALKING",
+            "fewer_transfers": "FEWER_TRANSFERS",
+            "less walking": "LESS_WALKING",
+            "fewer transfers": "FEWER_TRANSFERS",
+            "less transfers": "FEWER_TRANSFERS",
+        }
+        return mapping.get(key, mapping.get(key.lower()))
 
     def _heuristic_planning_state(
         self,

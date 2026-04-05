@@ -46,3 +46,61 @@ def test_normalize_planning_payload_coerces_soft_preference_weights() -> None:
     assert normalized["soft_preferences"][2]["weight"] == 0.3
     assert normalized["soft_preferences"][3]["weight"] == 0.72
     assert normalized["soft_preferences"][4]["weight"] == 0.5
+
+
+def test_normalize_execution_plan_normalizes_route_request_and_time_conflict() -> None:
+    client = GeminiClient(http_client=httpx.AsyncClient(), settings=Settings())
+    payload = {
+        "direct_answer_only": False,
+        "use_places": True,
+        "use_routes": True,
+        "build_itinerary": True,
+        "search_focus": ["ramen"],
+        "action_order": ["search_places", "compute_routes", "build_itinerary"],
+        "route_request": {
+            "compute_alternative_routes": True,
+            "departure_time": "2026-04-06T09:00:00+09:00",
+            "arrival_time": "2026-04-06T10:00:00+09:00",
+            "transit_allowed_travel_modes": ["metro", "BUS", "tram", "unknown"],
+            "transit_routing_preference": "less walking",
+        },
+    }
+
+    normalized = client._normalize_execution_plan(payload, raw_request="route options")
+
+    assert normalized["route_request"]["compute_alternative_routes"] is True
+    assert normalized["route_request"]["departure_time"] == "2026-04-06T09:00:00+09:00"
+    assert normalized["route_request"]["arrival_time"] is None
+    assert normalized["route_request"]["transit_allowed_travel_modes"] == [
+        "SUBWAY",
+        "BUS",
+        "LIGHT_RAIL",
+    ]
+    assert normalized["route_request"]["transit_routing_preference"] == "LESS_WALKING"
+
+
+def test_normalize_execution_plan_direct_answer_clears_route_request() -> None:
+    client = GeminiClient(http_client=httpx.AsyncClient(), settings=Settings())
+    payload = {
+        "direct_answer_only": True,
+        "use_places": True,
+        "use_routes": True,
+        "build_itinerary": True,
+        "action_order": ["search_places"],
+        "route_request": {
+            "compute_alternative_routes": True,
+            "departure_time": "2026-04-06T09:00:00+09:00",
+            "arrival_time": None,
+            "transit_allowed_travel_modes": ["BUS"],
+            "transit_routing_preference": "FEWER_TRANSFERS",
+        },
+    }
+
+    normalized = client._normalize_execution_plan(payload, raw_request="what is jet lag")
+
+    assert normalized["action_order"] == ["direct_answer"]
+    assert normalized["route_request"]["compute_alternative_routes"] is False
+    assert normalized["route_request"]["departure_time"] is None
+    assert normalized["route_request"]["arrival_time"] is None
+    assert normalized["route_request"]["transit_allowed_travel_modes"] == []
+    assert normalized["route_request"]["transit_routing_preference"] is None

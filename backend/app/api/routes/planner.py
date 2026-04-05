@@ -9,6 +9,8 @@ from app.clients.maps import PlacesClient, RoutesClient
 from app.core.config import get_settings
 from app.models.planning import (
     PlanningStateResponse,
+    TransitRouteDebugRequest,
+    TransitRouteDebugResponse,
     TravelPlanningRequest,
     TripPlanResponse,
 )
@@ -74,6 +76,25 @@ async def build_trip_plan(
 ) -> TripPlanResponse:
     try:
         return await planner_service.build_trip_plan(payload)
+    except GoogleAPIError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/test-transit-route", response_model=TransitRouteDebugResponse)
+async def test_transit_route(
+    payload: TransitRouteDebugRequest,
+    planner_service: PlannerService = Depends(get_planner_service),
+) -> TransitRouteDebugResponse:
+    try:
+        return await planner_service.debug_transit_route(payload)
     except GoogleAPIError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

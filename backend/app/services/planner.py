@@ -5,6 +5,8 @@ from app.clients.maps import PlacesClient, RoutesClient
 from app.core.config import Settings
 from app.models.planning import (
     PlanningState,
+    TransitRouteDebugRequest,
+    TransitRouteDebugResponse,
     TransportMode,
     TransportPreference,
     TravelPlanningRequest,
@@ -32,6 +34,8 @@ class PlannerService:
     ) -> None:
         self.settings = settings
         self.gemini_client = gemini_client
+        self.places_client = places_client
+        self.routes_client = routes_client
         self.workflow = PlannerWorkflow(
             settings=settings,
             gemini_client=gemini_client,
@@ -79,6 +83,63 @@ class PlannerService:
         request: TravelPlanningRequest,
     ) -> TripPlanResponse:
         return await self.workflow.run(request)
+
+    async def debug_transit_route(
+        self,
+        request: TransitRouteDebugRequest,
+    ) -> TransitRouteDebugResponse:
+        if request.departure_time and request.arrival_time:
+            raise ValueError("Provide either departure_time or arrival_time, not both.")
+
+        language_code = request.language_code or self.settings.default_language_code
+        region_code = request.region_code or self.settings.default_region_code
+
+        origin_candidates = await self.places_client.search_text(
+            text_query=request.origin_query,
+            language_code=language_code,
+            region_code=region_code,
+            max_results=1,
+        )
+        if not origin_candidates:
+            raise ValueError(
+                "Could not resolve origin_query to a place. Please use a more specific origin."
+            )
+
+        destination_candidates = await self.places_client.search_text(
+            text_query=request.destination_query,
+            language_code=language_code,
+            region_code=region_code,
+            max_results=1,
+        )
+        if not destination_candidates:
+            raise ValueError(
+                "Could not resolve destination_query to a place. Please use a more specific destination."
+            )
+
+        route = await self.routes_client.compute_route(
+            origin=origin_candidates[0],
+            destination=destination_candidates[0],
+            mode=request.transport_mode,
+            language_code=language_code,
+            departure_time=request.departure_time,
+            arrival_time=request.arrival_time,
+            compute_alternative_routes=request.compute_alternative_routes,
+            transit_allowed_travel_modes=[
+                mode.value for mode in request.transit_allowed_travel_modes
+            ],
+            transit_routing_preference=(
+                request.transit_routing_preference.value
+                if request.transit_routing_preference
+                else None
+            ),
+        )
+
+        return TransitRouteDebugResponse(
+            origin=origin_candidates[0],
+            destination=destination_candidates[0],
+            transport_mode=request.transport_mode,
+            route=route,
+        )
 
     def _resolve_transport_modes(
         self,

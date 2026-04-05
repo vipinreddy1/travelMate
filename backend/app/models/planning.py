@@ -49,6 +49,19 @@ class TransportPreference(str, Enum):
     OPTIMIZE_MONEY = "optimize_for_money"
 
 
+class TransitTravelMode(str, Enum):
+    BUS = "BUS"
+    SUBWAY = "SUBWAY"
+    TRAIN = "TRAIN"
+    LIGHT_RAIL = "LIGHT_RAIL"
+    RAIL = "RAIL"
+
+
+class TransitRoutingPreference(str, Enum):
+    LESS_WALKING = "LESS_WALKING"
+    FEWER_TRANSFERS = "FEWER_TRANSFERS"
+
+
 class FeasibilityStatus(str, Enum):
     FEASIBLE = "feasible"
     NEEDS_MORE_INFO = "needs_more_info"
@@ -169,6 +182,18 @@ class TravelStep(BaseModel):
     transit_headsign: str | None = None
     transit_stop_count: int | None = None
     vehicle_type: str | None = None
+    departure_time: datetime | None = None
+    arrival_time: datetime | None = None
+    localized_departure_time: str | None = None
+    localized_arrival_time: str | None = None
+    headway_minutes: int | None = None
+    trip_short_text: str | None = None
+    transit_agency_names: list[str] = Field(default_factory=list)
+    transit_line_uri: str | None = None
+    transit_line_color: str | None = None
+    transit_line_text_color: str | None = None
+    transit_fare: float | None = None
+    transit_fare_currency: str | None = None
     walk_to_station_minutes: int | None = None
     walk_from_station_minutes: int | None = None
     step_instructions: list[str] = Field(default_factory=list)
@@ -246,3 +271,23 @@ class TripPlanResponse(BaseModel):
     explanation: str
     warnings: list[str] = Field(default_factory=list)
     metadata: PlanMetadata
+
+
+class TransitRouteDebugRequest(BaseModel):
+    origin_query: str = Field(min_length=2)
+    destination_query: str = Field(min_length=2)
+    language_code: str | None = None
+    region_code: str | None = None
+    transport_mode: TransportMode = TransportMode.TRANSIT
+    departure_time: datetime | None = None
+    arrival_time: datetime | None = None
+    compute_alternative_routes: bool = False
+    transit_allowed_travel_modes: list[TransitTravelMode] = Field(default_factory=list)
+    transit_routing_preference: TransitRoutingPreference | None = None
+
+
+class TransitRouteDebugResponse(BaseModel):
+    origin: CandidatePlace
+    destination: CandidatePlace
+    transport_mode: TransportMode
+    route: TravelStep

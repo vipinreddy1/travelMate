@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 from app.api.routes.health import router as health_router
 from app.api.routes.planner import router as planner_router
+from app.api.routes.routes_direct import router as routes_direct_router
 from app.core.config import get_settings
 from app.services.memory import InMemorySessionStore
 
@@ -30,3 +31,4 @@ app = FastAPI(
 
 app.include_router(health_router)
 app.include_router(planner_router)
+app.include_router(routes_direct_router)
