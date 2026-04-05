@@ -47,6 +47,7 @@ export interface Itinerary {
     }>
   }>
   heroImage: string
+  blogId?: string
 }
 
 interface AppStore {
