@@ -17,11 +17,15 @@ class Settings(BaseModel):
 
     gemini_api_key: SecretStr | None = None
     maps_api_key: SecretStr | None = None
+    elevenlabs_api_key: SecretStr | None = None
+    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+    elevenlabs_model_id: str = "eleven_multilingual_v2"
     gemini_model: str = "gemini-2.5-flash"
 
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     places_base_url: str = "https://places.googleapis.com/v1"
     routes_base_url: str = "https://routes.googleapis.com"
+    elevenlabs_base_url: str = "https://api.elevenlabs.io/v1"
 
     default_language_code: str = "en"
     default_region_code: str = "US"
@@ -35,6 +39,7 @@ class Settings(BaseModel):
     planner_response_context_limit: int = 1
     planner_request_timeout_seconds: float = 20.0
     planner_enable_google_calls: bool = True
+    elevenlabs_request_timeout_seconds: float = 30.0
 
     @property
     def gemini_api_key_value(self) -> str | None:
@@ -48,6 +53,12 @@ class Settings(BaseModel):
             return None
         return self.maps_api_key.get_secret_value()
 
+    @property
+    def elevenlabs_api_key_value(self) -> str | None:
+        if self.elevenlabs_api_key is None:
+            return None
+        return self.elevenlabs_api_key.get_secret_value()
+
     @classmethod
     def from_env(cls) -> "Settings":
         env_file_values = _read_env_file()
@@ -59,6 +70,17 @@ class Settings(BaseModel):
             gemini_api_key=_read_secret("GEMINI_API_KEY", env_file_values),
             maps_api_key=_read_secret("MAPS_API_KEY", env_file_values),
             gemini_model=_read_value("GEMINI_MODEL", "gemini-2.5-flash", env_file_values),
+            elevenlabs_api_key=_read_secret("ELEVENLABS_API_KEY", env_file_values),
+            elevenlabs_voice_id=_read_value(
+                "ELEVENLABS_VOICE_ID",
+                "21m00Tcm4TlvDq8ikWAM",
+                env_file_values,
+            ),
+            elevenlabs_model_id=_read_value(
+                "ELEVENLABS_MODEL_ID",
+                "eleven_multilingual_v2",
+                env_file_values,
+            ),
             default_language_code=_read_value(
                 "DEFAULT_LANGUAGE_CODE",
                 "en",
@@ -93,6 +115,13 @@ class Settings(BaseModel):
             ),
             planner_enable_google_calls=_read_bool(
                 _read_value("PLANNER_ENABLE_GOOGLE_CALLS", "true", env_file_values)
+            ),
+            elevenlabs_request_timeout_seconds=float(
+                _read_value(
+                    "ELEVENLABS_REQUEST_TIMEOUT_SECONDS",
+                    "30",
+                    env_file_values,
+                )
             ),
         )
 

@@ -65,8 +65,16 @@ The app expects:
   - Used for Gemini reasoning and itinerary explanations
 - `MAPS_API_KEY`
   - Used for Places and Routes requests
+- `ELEVENLABS_API_KEY`
+  - Used by the ElevenLabs text-to-speech helper in `app/services/elevenlabs_tts.py`
+- `ELEVENLABS_VOICE_ID`
+  - Optional voice override for audio generation
 
 You should enable the relevant services in your Google project before running the app.
+
+## Text to speech helper
+
+The `app/services/elevenlabs_tts.py` module exposes an async `elevenlabsTTS(text)` helper. It reads `ELEVENLABS_API_KEY` from `.env`, sends the text to ElevenLabs, and writes an `.mp3` file to `generated_audio/` by default.
 
 ## Run locally
 
